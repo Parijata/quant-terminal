@@ -17,7 +17,8 @@ import * as imports from "./lib/imports.js";
 import * as alerts from "./lib/alerts.js";
 import * as store from "./lib/store.js";
 import * as info from "./lib/market-info.js";
-import { registerIndicator, INDICATORS } from "./public/lib/indicators.js";
+import * as indiaMarket from "./lib/india-market.js";
+import { registerIndicator, INDICATORS, compute } from "./public/lib/indicators.js";
 import { conditionFn, backtest, magnifierTf } from "./public/lib/backtest.js";
 import { quantChecks } from "./public/lib/quant.js";
 import { parseTf } from "./public/lib/series.js";
@@ -259,6 +260,7 @@ async function handle(req, res) {
         platform: process.platform,
         providers: data.health,
         feeds: feeds.configured(),
+        broker: indiaMarket.brokerSettings(),
         yahoo: data.yahooAvailable() ? "available" : "rate limited",
         alerts: alerts.list().filter((a) => a.active).length,
       });
@@ -269,22 +271,40 @@ async function handle(req, res) {
     if (p === "/api/search") return send(res, 200, await data.search(q.q, q.type));
     if (p === "/api/spread") return send(res, 200, await data.getSpread(q.symbol));
     if (p === "/api/candles")
-      return send(
-        res,
-        200,
-        await data.getCandles(q.symbol, q.tf || "1D", q.limit),
-      );
+      {
+        let brokerNote = "";
+        const indian = /\.(NS|BO)$/i.test(q.symbol || "") || /\^NSEI|\^BSESN/i.test(q.symbol || "");
+        if (indian) try {
+          const broker = await indiaMarket.brokerCandles(q.symbol, q.tf || "1D", q.limit);
+          if (broker) return send(res, 200, broker);
+        } catch (e) { brokerNote = e.message; }
+        const result = await data.getCandles(q.symbol, q.tf || "1D", q.limit);
+        if (brokerNote) result.notes = [...(result.notes || []), brokerNote];
+        return send(res, 200, result);
+      }
     if (p === "/api/quotes")
-      return send(
-        res,
-        200,
-        await data.getQuotes(
-          (q.symbols || "").split(",").filter(Boolean).slice(0, 200),
-        ),
-      );
+      {
+        const symbols = (q.symbols || "").split(",").filter(Boolean).slice(0, 200);
+        const quotes = await data.getQuotes(symbols);
+        const indianSymbols = symbols.filter((symbol) => /\.(NS|BO)$/i.test(symbol) || /\^NSEI|\^BSESN/i.test(symbol));
+        if (indiaMarket.brokerSettings().broker !== "none") await mapLimit(indianSymbols, 4, async (symbol) => {
+          try {
+            const price = await indiaMarket.brokerQuote(symbol);
+            if (price != null) quotes[symbol] = { ...quotes[symbol], price, provider: `${indiaMarket.brokerSettings().broker} broker API` };
+          } catch { /* public quote remains the fallback */ }
+        });
+        return send(res, 200, quotes);
+      }
+    if (p === "/api/india/option-chain") return send(res, 200, q.source === "broker" ? await indiaMarket.brokerOptionChain(q.symbol || "NIFTY") : await indiaMarket.optionChain(q.symbol || "NIFTY"));
+    if (p === "/api/india/flows") return send(res, 200, await indiaMarket.flowsAndDeals());
+    if (p === "/api/broker-settings") {
+      if (req.method === "GET") return send(res, 200, indiaMarket.brokerSettings());
+      if (req.method === "PUT") return send(res, 200, indiaMarket.saveBrokerSettings(await readBody(req)));
+    }
     if (p === "/api/calendar")
       return send(res, 200, await data.economicCalendar());
     if (p === "/api/earnings") return send(res, 200, await info.earnings(Number(q.days) || 5));
+    if (p === "/api/india-earnings") return send(res, 200, await info.indianEarnings());
     if (p === "/api/dividends") return send(res, 200, await info.dividends(Number(q.days) || 5));
     if (p === "/api/news") return send(res, 200, await info.news(q.symbol));
     if (p === "/api/financials") return send(res, 200, await info.financials(q.symbol, q.frequency));
@@ -293,14 +313,37 @@ async function handle(req, res) {
       const rows =
         u === "crypto"
           ? await data.cryptoScreener()
+          : u === "india"
+            ? await data.indiaScreener()
+          : ["nifty50", "niftynext50", "nifty100", "nifty500", "sensex"].includes(u)
+            ? await data.indiaIndexScreener(u)
           : await data.nasdaqScreener(u === "etf" ? "etf" : "stocks");
       return send(res, 200, rows);
+    }
+    if (p === "/api/correlation") {
+      const symbols = [...new Set(String(q.symbols || "").split(",").map((s) => s.trim()).filter(Boolean))].slice(0, 12);
+      if (symbols.length < 2) throw httpError(400, "Enter at least two symbols for a correlation matrix.");
+      const series = await mapLimit(symbols, 4, async (symbol) => {
+        const { candles } = await data.getCandles(symbol, "1D", 400);
+        const byDay = new Map();
+        for (let i = 1; i < candles.length; i++) if (candles[i - 1].close) byDay.set(candles[i].time, (candles[i].close / candles[i - 1].close) - 1);
+        return { symbol, byDay };
+      });
+      const corr = (a, b) => {
+        const pairs = [...a.byDay].flatMap(([t, x]) => b.byDay.has(t) ? [[x, b.byDay.get(t)]] : []);
+        if (pairs.length < 20) return null;
+        const mx = pairs.reduce((s, x) => s + x[0], 0) / pairs.length, my = pairs.reduce((s, x) => s + x[1], 0) / pairs.length;
+        let cov = 0, vx = 0, vy = 0;
+        for (const [x, y] of pairs) { cov += (x - mx) * (y - my); vx += (x - mx) ** 2; vy += (y - my) ** 2; }
+        return vx && vy ? cov / Math.sqrt(vx * vy) : null;
+      };
+      return send(res, 200, { symbols: series.map((x) => x.symbol), observations: series.map((x) => x.byDay.size), matrix: series.map((a) => series.map((b) => a === b ? 1 : corr(a, b))) });
     }
     if (p === "/api/scan" && req.method === "POST") {
       const body = await readBody(req);
       if (!Array.isArray(body.symbols) || !Array.isArray(body.rules ?? []))
         throw httpError(400, "Send { symbols: [...], rules: [...] }");
-      const symbols = body.symbols.slice(0, 150);
+      const symbols = body.symbols.slice(0, 500);
       const rules = body.rules || [];
       const results = await mapLimit(symbols, 4, async (symbol) => {
         try {
@@ -309,15 +352,40 @@ async function handle(req, res) {
             body.tf || "1D",
             400,
           );
-          const make = conditionFn(candles, body.indicators || {});
           const i = candles.length - 1;
-          const passes = rules.map((r) => make(r)(i));
-          return {
-            symbol,
-            pass: passes.every(Boolean),
-            passes,
-            close: candles[i].close,
-          };
+          const make = rules.length ? conditionFn(candles, body.indicators || {}) : null;
+          const passes = make ? rules.map((r) => make(r)(i)) : [];
+          let metrics;
+          if (body.metrics && candles.length) {
+            const rsi = compute("rsi", candles, { length: 14 }).value;
+            const e50 = compute("ema", candles, { length: 50, source: "close" }).value;
+            const e200 = compute("ema", candles, { length: 200, source: "close" }).value;
+            const macd = compute("macd", candles, { fast: 12, slow: 26, signal: 9, source: "close" });
+            const st = compute("supertrend", candles, { atrLength: 10, factor: 3 }).direction;
+            const prevVol = candles.slice(Math.max(0, i - 20), i).reduce((s, b) => s + (b.volume || 0), 0) / Math.max(1, Math.min(20, i));
+            const range = candles.slice(Math.max(0, i - 251), i + 1);
+            const high52 = Math.max(...range.map((b) => b.high)), low52 = Math.min(...range.map((b) => b.low));
+            metrics = {
+              rsi: rsi[i], ema50: e50[i], ema200: e200[i],
+              aboveEMA50: candles[i].close > e50[i], aboveEMA200: candles[i].close > e200[i],
+              volumeSpike: prevVol ? (candles[i].volume || 0) / prevVol : null,
+              high52DistancePct: high52 ? (high52 - candles[i].close) / high52 * 100 : null,
+              low52DistancePct: low52 ? (candles[i].close - low52) / low52 * 100 : null,
+              changePct: i ? (candles[i].close / candles[i - 1].close - 1) * 100 : null,
+              supertrendFlip: i && st[i] !== st[i - 1] ? (st[i] < 0 ? "up" : "down") : null,
+              macdCross: i && macd.macd[i] > macd.signal[i] && macd.macd[i - 1] <= macd.signal[i - 1] ? "bullish" : i && macd.macd[i] < macd.signal[i] && macd.macd[i - 1] >= macd.signal[i - 1] ? "bearish" : null,
+            };
+          }
+          const f = body.metricFilters || {};
+          const metricPass = !metrics || (
+            (f.rsiMin == null || metrics.rsi >= f.rsiMin) && (f.rsiMax == null || metrics.rsi <= f.rsiMax) &&
+            (!f.ema || (f.ema === "above50" ? metrics.aboveEMA50 : f.ema === "below50" ? !metrics.aboveEMA50 : f.ema === "above200" ? metrics.aboveEMA200 : !metrics.aboveEMA200)) &&
+            (f.volumeSpike == null || metrics.volumeSpike >= f.volumeSpike) &&
+            (!f.week52 || (f.week52 === "high" ? metrics.high52DistancePct <= 5 : metrics.low52DistancePct <= 5)) &&
+            (f.changeMin == null || metrics.changePct >= f.changeMin) && (f.changeMax == null || metrics.changePct <= f.changeMax) &&
+            (!f.supertrendFlip || metrics.supertrendFlip === f.supertrendFlip) && (!f.macdCross || metrics.macdCross === f.macdCross)
+          );
+          return { symbol, pass: passes.every(Boolean) && metricPass, passes, close: candles[i]?.close, ...(metrics ? { metrics } : {}) };
         } catch (e) {
           return { symbol, error: e.message };
         }

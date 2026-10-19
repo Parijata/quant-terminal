@@ -2121,6 +2121,24 @@ export const INDICATORS = [
     calc: (bars, p) => ({ value: zigzagOf(bars, p.deviation, p.depth) }),
   },
   {
+    id: "volume-spike",
+    name: "Volume Spike Ratio",
+    group: "Volume",
+    overlay: false,
+    inputs: [{ key: "length", label: "Previous bars average", type: "int", default: 20, min: 1 }],
+    outputs: [line("value", "Volume / previous average", "#26a69a")],
+    calc: (bars, p) => {
+      const n = Math.max(1, Math.floor(p.length || 20));
+      const value = bars.map((b, i) => {
+        const from = Math.max(0, i - n);
+        if (i <= from) return N;
+        const avg = bars.slice(from, i).reduce((sum, x) => sum + (x.volume || 0), 0) / (i - from);
+        return avg ? (b.volume || 0) / avg : N;
+      });
+      return { value };
+    },
+  },
+  {
     id: "volume",
     name: "Volume",
     volumeFormat: true,

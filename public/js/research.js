@@ -66,11 +66,13 @@ const MONTHS = [
 ];
 
 export async function renderSeasonals(el, app, opts = {}) {
-  const sym = app.active?.cfg.symbol;
+  const sym = opts.symbol || app.active?.cfg.symbol;
   const showYears = opts.years || 6;
-  el.innerHTML = `<div class="seas"><div class="seas-left"><div class="row-flex pad" style="padding-bottom:4px"><b>${esc(ticker(sym))} by calendar year</b><label class="field" style="flex-direction:row;align-items:center;gap:6px">Years<select data-years>${[3, 6, 10, 20].map((n) => `<option ${n === showYears ? "selected" : ""}>${n}</option>`).join("")}</select></label><span class="hint-text" data-note>Loading daily history…</span></div><div class="seas-chart" data-chart></div><div class="seas-legend" data-legend></div></div><div class="seas-right" data-table></div></div>`;
+  el.innerHTML = `<div class="seas"><div class="seas-left"><div class="row-flex pad" style="padding-bottom:4px"><label class="field">Symbol<input class="in" data-season-symbol value="${esc(sym)}" style="width:150px"></label><button class="btn small" data-season-load style="align-self:end">Load</button><b>${esc(ticker(sym))} by calendar year</b><label class="field" style="flex-direction:row;align-items:center;gap:6px">Years<select data-years>${[3, 6, 10, 20].map((n) => `<option ${n === showYears ? "selected" : ""}>${n}</option>`).join("")}</select></label><span class="hint-text" data-note>Loading daily history…</span></div><div class="seas-chart" data-chart></div><div class="seas-legend" data-legend></div></div><div class="seas-right" data-table></div></div>`;
+  el.querySelector("[data-season-load]").onclick = () => renderSeasonals(el, app, { years: showYears, symbol: el.querySelector("[data-season-symbol]").value.trim() || sym });
+  el.querySelector("[data-season-symbol]").onkeydown = (e) => { if (e.key === "Enter") el.querySelector("[data-season-load]").click(); };
   el.querySelector("[data-years]").onchange = (e) =>
-    renderSeasonals(el, app, { years: Number(e.target.value) });
+    renderSeasonals(el, app, { years: Number(e.target.value), symbol: sym });
   let bars;
   try {
     bars = (await api.candles(sym, "1D", 8000)).candles;
@@ -78,7 +80,7 @@ export async function renderSeasonals(el, app, opts = {}) {
     el.querySelector("[data-note]").textContent = e.message;
     return;
   }
-  if (app.active?.cfg.symbol !== sym || !el.isConnected) return;
+  if (el.querySelector("[data-season-symbol]")?.value.trim() !== sym || !el.isConnected) return;
   const s = seasonals(bars);
   el.querySelector("[data-note]").textContent =
     `${s.years.length} years of daily bars · average of ${s.completeYears} complete years`;
@@ -174,13 +176,34 @@ export async function renderSeasonals(el, app, opts = {}) {
   </tbody></table><p class="hint-text pad">Monthly moves in %. Past seasonality doesn't make next year's move.</p>`;
 }
 
+// Pearson correlation of daily close-to-close returns, matched by UTC date.
+export async function renderCorrelation(el, app, initial = null) {
+  const first = initial || `${app.active?.cfg.symbol || "YAHOO:RELIANCE.NS"},YAHOO:^NSEI,YAHOO:^BSESN`;
+  el.innerHTML = `<div class="pad"><div class="row-flex"><label class="field" style="flex:1">Symbols (comma separated; max 12)<input class="in" data-corr-syms value="${esc(first)}" placeholder="RELIANCE.NS, TCS.NS, ^NSEI"></label><button class="btn primary" data-corr-run style="align-self:end">Build matrix</button></div><p class="hint-text">Daily returns, matched by date. At least 20 overlapping sessions are needed for a coefficient.</p><div data-corr-table class="hint-text">Enter symbols and build the matrix.</div></div>`;
+  const run = async () => {
+    const box = el.querySelector("[data-corr-table]"), raw = el.querySelector("[data-corr-syms]").value;
+    const symbols = raw.split(",").map(s => s.trim()).filter(Boolean);
+    box.textContent = "Loading daily returns…";
+    try {
+      const r = await api.get(`/api/correlation?symbols=${encodeURIComponent(symbols.join(","))}`);
+      if (!el.isConnected) return;
+      const shade = (v) => { if (v == null) return "transparent"; const a=Math.min(.7,Math.abs(v)*.65); return v>=0?`rgba(8,153,129,${a})`:`rgba(242,54,69,${a})`; };
+      box.className = "";
+      box.innerHTML = `<div style="overflow:auto"><table class="t"><thead><tr><th>Symbol</th>${r.symbols.map(s=>`<th>${esc(ticker(s))}</th>`).join("")}</tr></thead><tbody>${r.matrix.map((row,i)=>`<tr><th class="l">${esc(ticker(r.symbols[i]))}</th>${row.map(v=>`<td style="background:${shade(v)}">${v==null?"—":v.toFixed(2)}</td>`).join("")}</tr>`).join("")}</tbody></table></div><p class="hint-text">Daily close returns over up to 400 sessions. Pairwise dates are aligned before calculating Pearson correlation.</p>`;
+    } catch(e) { box.textContent = `Correlation unavailable: ${e.message}`; }
+  };
+  el.querySelector("[data-corr-run]").onclick = run;
+  el.querySelector("[data-corr-syms]").onkeydown = e => { if(e.key==="Enter") run(); };
+}
+
 // ---------- financials ----------
 export async function renderFinancials(el, app, opts = {}) {
   const sym = app.active?.cfg.symbol;
   const freq = opts.freq || "annual",
     tab = opts.tab || "income";
-  if (exchange(sym) !== "US") {
-    el.innerHTML = `<div class="pad hint-text">Company financials are for US-listed stocks. Open one (AAPL, NVDA, JPM…) to see its income statement, balance sheet, cash flow and key stats.</div>`;
+  const indian = exchange(sym) === "YAHOO" && /\.(NS|BO)$/i.test(ticker(sym));
+  if (exchange(sym) !== "US" && !indian) {
+    el.innerHTML = `<div class="pad hint-text">Company financials are available for US and NSE/BSE stocks. Open a listed company to see its statements and key stats.</div>`;
     return;
   }
   el.innerHTML = '<div class="pad hint-text">Loading financials…</div>';
@@ -207,7 +230,7 @@ export async function renderFinancials(el, app, opts = {}) {
     ni = find(/^net income$/i) || find(/net income/i);
   const toNum = (v) => {
     const str = String(v ?? "").trim(),
-      n = parseFloat(str.replace(/[$,()]/g, ""));
+      n = parseFloat(str.replace(/[$₹,()]/g, ""));
     return Number.isFinite(n) ? (str.startsWith("(") ? -Math.abs(n) : n) : null;
   };
   let bars = "";
@@ -220,7 +243,12 @@ export async function renderFinancials(el, app, opts = {}) {
       }))
       .reverse();
     const max = Math.max(...periods.map((x) => Math.abs(x.r || 0)), 1);
-    const money = (v) => (v == null ? "—" : `$${(v / 1e6).toFixed(1)}B`);
+    const money = (v) => {
+      if (v == null) return "—";
+      const unitScale = f.currency === "INR" ? 1e9 : 1e6;
+      const short = `${(Math.abs(v) / unitScale).toFixed(1)}B`;
+      return `${f.currency === "INR" ? "₹" : "$"}${v < 0 ? "−" : ""}${short}`;
+    };
     bars = `<div class="fin-bars">${periods.map((x) => `<div class="fin-col"><div class="fin-stack"><div class="fin-bar rev" style="height:${(Math.abs(x.r || 0) / max) * 100}%" title="Revenue ${money(x.r)}"></div><div class="fin-bar ni ${x.n < 0 ? "neg" : ""}" style="height:${(Math.abs(x.n || 0) / max) * 100}%" title="Net income ${money(x.n)}"></div></div><div class="sub">${esc(x.p)}</div><div class="sub">${money(x.r)} · ${money(x.n)}</div></div>`).join("")}</div><div class="hint-text">Blue: revenue. Green: net income.</div>`;
   }
   el.innerHTML = `<div class="tester"><div class="left">
@@ -238,7 +266,7 @@ export async function renderFinancials(el, app, opts = {}) {
           "",
         )}<span class="spacer"></span><select class="in" data-freq><option value="annual">Annual</option><option value="quarterly">Quarterly</option></select></div>
       ${t ? `<table class="t"><thead><tr><th class="l"></th>${t.periods.map((p) => `<th>${esc(p)}</th>`).join("")}</tr></thead><tbody>${t.rows.map((r) => `<tr><td class="l">${esc(r.label)}</td>${r.values.map((v) => `<td>${esc(v)}</td>`).join("")}</tr>`).join("")}</tbody></table>` : '<p class="hint-text">Not available for this company.</p>'}
-      <p class="hint-text">${esc(f.note)} Source: Nasdaq.</p>
+      <p class="hint-text">${esc(f.note)} Source: ${esc(f.source || "Nasdaq")}.</p>
     </div></div>`;
   el.querySelector("[data-freq]").value = freq;
   el.querySelector("[data-freq]").onchange = (e) =>

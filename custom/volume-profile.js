@@ -1,7 +1,7 @@
 import { nan } from "./_helpers.mjs";
 
 export default {
-  name: "Volume Profile (Custom)", group: "Volume", overlay: true,
+  name: "Volume Profile · Visible Range (Custom)", group: "Volume", overlay: true,
   inputs: [
     { key: "rows", label: "Rows", type: "int", default: 24, min: 4 },
     { key: "width", label: "Width (% of chart)", type: "int", default: 30, min: 5 },

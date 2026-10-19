@@ -22,6 +22,12 @@ export const TOOLS = [
     icon: '<path d="M2 21L22 3"/><circle cx="8" cy="16" r="1.6"/><circle cx="16" cy="9" r="1.6"/>',
   },
   {
+    id: "arrow",
+    label: "Arrow",
+    points: 2,
+    icon: '<path d="M4 20L19 5M10 5h9v9"/>',
+  },
+  {
     id: "hline",
     label: "Horizontal line",
     points: 1,
@@ -58,6 +64,12 @@ export const TOOLS = [
     icon: '<path d="M3 5h18M3 10h18M3 14h18M3 19h18" stroke-dasharray="2 2"/>',
   },
   {
+    id: "fibext",
+    label: "Fibonacci extension",
+    points: 2,
+    icon: '<path d="M3 19h18M3 12h18M3 5h18" stroke-dasharray="2 2"/>',
+  },
+  {
     id: "measure",
     label: "Price range / measure",
     points: 2,
@@ -84,6 +96,7 @@ export const TOOLS = [
 ];
 export const TOOL_BY_ID = Object.fromEntries(TOOLS.map((t) => [t.id, t]));
 export const FIB_LEVELS = [0, 0.236, 0.382, 0.5, 0.618, 0.786, 1, 1.618];
+export const FIB_EXT_LEVELS = [0, 0.618, 1, 1.272, 1.618, 2, 2.618];
 
 const COLORS = {
   line: "#2962ff",
@@ -98,6 +111,8 @@ export class DrawingLayer {
     this.items = [];
     this.temp = null;
     this.selected = null;
+    this.history = [];
+    this.historyIndex = -1;
     this._view = {
       zOrder: () => "top",
       renderer: () => ({
@@ -133,9 +148,38 @@ export class DrawingLayer {
   }
 
   setItems(items) {
-    this.items = items || [];
+    this.items = structuredClone(items || []);
+    this.selected = null;
+    this.history = [structuredClone(this.items)];
+    this.historyIndex = 0;
+    this.update();
+  }
+
+  commit() {
+    const snapshot = structuredClone(this.items);
+    if (JSON.stringify(snapshot) === JSON.stringify(this.history[this.historyIndex])) return;
+    this.history = this.history.slice(0, this.historyIndex + 1);
+    this.history.push(snapshot);
+    if (this.history.length > 100) this.history.shift();
+    this.historyIndex = this.history.length - 1;
+  }
+
+  undo() {
+    if (this.historyIndex <= 0) return false;
+    this.historyIndex--;
+    this.items = structuredClone(this.history[this.historyIndex]);
     this.selected = null;
     this.update();
+    return true;
+  }
+
+  redo() {
+    if (this.historyIndex >= this.history.length - 1) return false;
+    this.historyIndex++;
+    this.items = structuredClone(this.history[this.historyIndex]);
+    this.selected = null;
+    this.update();
+    return true;
   }
 
   draw(ctx, size) {
@@ -219,6 +263,18 @@ export class DrawingLayer {
         line(p.x, p.y, q.x, q.y);
         break;
       }
+      case "arrow": {
+        line(a.x, a.y, b.x, b.y);
+        const angle = Math.atan2(b.y - a.y, b.x - a.x);
+        const size = 10;
+        ctx.beginPath();
+        ctx.moveTo(b.x, b.y);
+        ctx.lineTo(b.x - size * Math.cos(angle - Math.PI / 6), b.y - size * Math.sin(angle - Math.PI / 6));
+        ctx.lineTo(b.x - size * Math.cos(angle + Math.PI / 6), b.y - size * Math.sin(angle + Math.PI / 6));
+        ctx.closePath();
+        ctx.fill();
+        break;
+      }
       case "hline":
         line(0, a.y, size.width, a.y);
         label(price(a.price), size.width - 4, a.y - 10, "right");
@@ -255,12 +311,16 @@ export class DrawingLayer {
         ctx.strokeRect(a.x, a.y, b.x - a.x, b.y - a.y);
         break;
       }
-      case "fib": {
+      case "fib":
+      case "fibext": {
         const x1 = Math.min(a.x, b.x),
           x2 = Math.max(a.x, b.x);
         ctx.strokeStyle = d.color || COLORS.fib;
-        for (const lv of FIB_LEVELS) {
-          const p = b.price + (a.price - b.price) * lv;
+        const levels = d.type === "fibext" ? FIB_EXT_LEVELS : FIB_LEVELS;
+        for (const lv of levels) {
+          const p = d.type === "fibext"
+            ? a.price + (b.price - a.price) * lv
+            : b.price + (a.price - b.price) * lv;
           const y = this.y(p);
           if (y == null) continue;
           ctx.globalAlpha = lv === 0.5 || lv === 0.618 ? 1 : 0.7;
@@ -386,7 +446,7 @@ export class DrawingLayer {
           x >= a.x - 4 && x <= a.x + 120 && Math.abs(y - a.y) < 12
             ? 0
             : Infinity;
-      else if (["rect", "fib", "measure", "long", "short"].includes(d.type)) {
+      else if (["rect", "fib", "fibext", "measure", "long", "short"].includes(d.type)) {
         const inside =
           x >= Math.min(a.x, b.x) - 4 &&
           x <= Math.max(a.x, b.x, a.x + 40) + 4 &&

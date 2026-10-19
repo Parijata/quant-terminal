@@ -17,7 +17,7 @@ import { VolumeProfile, SessionVolumeProfile } from "./volume-profile.js";
 const LW = window.LightweightCharts;
 
 export const CHART_TYPES = [
-  ["candles", "Candles"],
+  ["candles", "Candlestick"],
   ["hollow", "Hollow candles"],
   ["bars", "Bars"],
   ["heikin", "Heikin Ashi"],
@@ -130,6 +130,7 @@ export class ChartPane {
       indicators: [],
       compare: [],
       log: false,
+      scale: undefined,
       ...cfg,
     };
     this.bars = [];
@@ -207,7 +208,68 @@ export class ChartPane {
       });
     });
     this.drawings = new DrawingLayer(this);
+    this.bindDrawingPointer();
     this.makeMainSeries();
+  }
+
+  bindDrawingPointer() {
+    this.chartEl.addEventListener("pointerdown", (e) => {
+      if (this.app.tool !== "cursor" || e.button !== 0) return;
+      const rect = this.chartEl.getBoundingClientRect();
+      const x = e.clientX - rect.left;
+      const y = e.clientY - rect.top;
+      const drawing = this.drawings.hitTest(x, y);
+      if (!drawing) return;
+      this.app.setActive(this);
+      this.drawings.selected = drawing;
+      this.drawings.update();
+      if (drawing.locked) return;
+      const logical = this.chart.timeScale().coordinateToLogical(x);
+      const time = this.timeOfLogical(logical);
+      const price = this.main.coordinateToPrice(y);
+      if (time == null || price == null) return;
+      this.drawingDrag = {
+        pointerId: e.pointerId,
+        drawing,
+        points: structuredClone(drawing.points),
+        time,
+        price,
+      };
+      this.chart.applyOptions({ handleScroll: false, handleScale: false });
+      this.chartEl.setPointerCapture(e.pointerId);
+      e.preventDefault();
+      e.stopPropagation();
+    }, true);
+    this.chartEl.addEventListener("pointermove", (e) => {
+      const drag = this.drawingDrag;
+      if (!drag || drag.pointerId !== e.pointerId) return;
+      const rect = this.chartEl.getBoundingClientRect();
+      const x = e.clientX - rect.left;
+      const y = e.clientY - rect.top;
+      const logical = this.chart.timeScale().coordinateToLogical(x);
+      const time = this.timeOfLogical(logical);
+      const price = this.main.coordinateToPrice(y);
+      if (time == null || price == null) return;
+      const dt = time - drag.time;
+      const dp = price - drag.price;
+      drag.drawing.points = drag.points.map((p) => ({ time: p.time + dt, price: p.price + dp }));
+      this.drawings.update();
+      e.preventDefault();
+      e.stopPropagation();
+    }, true);
+    const finish = (e) => {
+      const drag = this.drawingDrag;
+      if (!drag || drag.pointerId !== e.pointerId) return;
+      this.drawingDrag = null;
+      this.setInteractive(this.app.tool === "cursor");
+      if (JSON.stringify(drag.points) !== JSON.stringify(drag.drawing.points))
+        this.commitDrawings();
+      try { this.chartEl.releasePointerCapture(e.pointerId); } catch { /* already released */ }
+      e.preventDefault();
+      e.stopPropagation();
+    };
+    this.chartEl.addEventListener("pointerup", finish, true);
+    this.chartEl.addEventListener("pointercancel", finish, true);
   }
 
   applyTheme() {
@@ -375,7 +437,7 @@ export class ChartPane {
       this.mtf = {};
       this.replay = null;
       this.el.querySelector(".replay-bar")?.remove();
-      this.drawings.setItems(this.app.getDrawings(r.symbol));
+      this.drawings.setItems(this.app.getDrawings(r.symbol, this.cfg.tf));
       this.showMsg(
         this.bars.length ? "" : "No data for this symbol and timeframe.",
       );
@@ -503,10 +565,11 @@ export class ChartPane {
         secondsVisible: parseTf(this.cfg.tf).seconds < 60,
       },
     });
+    const scale = this.cfg.scale || (this.cfg.compare.length ? "percentage" : this.cfg.log ? "log" : "normal");
     this.chart.priceScale("right").applyOptions({
-      mode: this.cfg.compare.length
+      mode: scale === "percentage"
         ? LW.PriceScaleMode.Percentage
-        : this.cfg.log
+        : scale === "log"
           ? LW.PriceScaleMode.Logarithmic
           : LW.PriceScaleMode.Normal,
     });
@@ -627,7 +690,7 @@ export class ChartPane {
       if (ind.hidden || !n) continue;
       if (res.markers && !ind.tf) markers.push(...res.markers);
       if (res.volumeProfile) {
-        const vp = new VolumeProfile(this, res.volumeProfile);
+        const vp = new VolumeProfile(this, { ...res.volumeProfile, color: ind.colors?.value || "#39ff14" });
         this.main.attachPrimitive(vp);
         this.vpPrims.push(vp);
       }
@@ -764,6 +827,7 @@ export class ChartPane {
         this.cfg.compare = this.cfg.compare.filter(
           (s) => s !== btn.closest("[data-compare]").dataset.compare,
         );
+        if (!this.cfg.compare.length && !this.cfg.scale) this.cfg.scale = "normal";
         this.app.persist();
         return this.load({ keepView: true });
       }
@@ -844,7 +908,7 @@ export class ChartPane {
     if (!def || !pt) return;
     const d = this.drawings;
     if (!d.temp) {
-      d.temp = { id: newUid(), type: tool, points: [pt] };
+      d.temp = { id: newUid(), type: tool, points: [pt], color: this.app.drawingColor || this.app.settings.drawingColor };
       if (def.points > 1) d.temp.points.push({ ...pt });
     } else {
       d.temp.points[d.temp.points.length - 1] = pt;
@@ -867,7 +931,7 @@ export class ChartPane {
       }
       d.items.push(item);
       d.selected = item;
-      this.app.saveDrawings(this.cfg.symbol, d.items);
+      this.commitDrawings();
       if (!this.app.settings.stayInDrawMode) this.app.setTool("cursor");
     }
     d.update();
@@ -879,8 +943,42 @@ export class ChartPane {
     d.items = d.items.filter((x) => x !== d.selected);
     d.selected = null;
     d.update();
-    this.app.saveDrawings(this.cfg.symbol, d.items);
+    this.commitDrawings();
     return true;
+  }
+
+  commitDrawings() {
+    this.drawings.commit();
+    this.app.saveDrawings(this.cfg.symbol, this.cfg.tf, this.drawings.items);
+  }
+
+  undoDrawing() {
+    if (!this.drawings.undo()) return false;
+    this.app.saveDrawings(this.cfg.symbol, this.cfg.tf, this.drawings.items);
+    return true;
+  }
+
+  redoDrawing() {
+    if (!this.drawings.redo()) return false;
+    this.app.saveDrawings(this.cfg.symbol, this.cfg.tf, this.drawings.items);
+    return true;
+  }
+
+  setSelectedDrawingColor(color) {
+    const d = this.drawings.selected;
+    if (!d) return;
+    d.color = color;
+    this.drawings.update();
+    this.commitDrawings();
+  }
+
+  toggleDrawingLock() {
+    const d = this.drawings.selected;
+    if (!d) return this.app.toast("Select a drawing to lock it.");
+    d.locked = !d.locked;
+    this.drawings.update();
+    this.commitDrawings();
+    this.app.toast(d.locked ? "Drawing locked." : "Drawing unlocked.");
   }
 
   clearDrawings() {
@@ -888,7 +986,7 @@ export class ChartPane {
     this.drawings.selected = null;
     this.drawings.temp = null;
     this.drawings.update();
-    this.app.saveDrawings(this.cfg.symbol, []);
+    this.commitDrawings();
   }
 
   setInteractive(on) {

@@ -253,6 +253,7 @@ select.tb option {
   padding-top: 6px;
   gap: 2px;
   flex: none;
+  overflow-y: auto;
 }
 .drawbar button {
   width: 34px;
@@ -276,6 +277,22 @@ select.tb option {
   border: 0;
   border-top: 1px solid var(--border);
   margin: 4px 0;
+}
+.draw-color {
+  width: 34px;
+  height: 34px;
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+}
+.draw-color input {
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: transparent;
+  cursor: pointer;
 }
 .center {
   flex: 1;
@@ -1012,3 +1029,7 @@ h4 {
 .quant-verdict.up { color: var(--up); }
 .quant-verdict.warn { color: #f7a600; }
 .quant-verdict.down { color: var(--down); }
+.indicator-result { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.indicator-result > span:first-child { display: flex; align-items: center; gap: 7px; }
+.indicator-star { border: 0; background: transparent; color: var(--muted); cursor: pointer; font-size: 17px; padding: 0 3px; }
+.indicator-star.on { color: #f2c94c; }

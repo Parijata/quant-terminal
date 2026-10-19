@@ -11,7 +11,7 @@ import {
   exchange,
 } from "./api.js";
 import { INDICATORS, BY_ID, registerIndicator } from "../lib/indicators.js";
-import { renderNews, renderSeasonals, renderFinancials } from "./research.js";
+import { renderNews, renderSeasonals, renderFinancials, renderCorrelation } from "./research.js";
 import { mountQuantChecks } from "./quantui.js";
 import {
   backtest,
@@ -24,6 +24,9 @@ import { parseTf } from "../lib/series.js";
 
 const $ = (s, el = document) => el.querySelector(s);
 const LW = window.LightweightCharts;
+const isIndianSymbol = (sym) =>
+  exchange(sym) === "YAHOO" &&
+  (/\.(NS|BO)$/i.test(ticker(sym)) || ["^NSEI", "^BSESN"].includes(ticker(sym).toUpperCase()));
 const css = (n) =>
   getComputedStyle(document.documentElement).getPropertyValue(n).trim();
 
@@ -260,7 +263,10 @@ export function initPanels(app) {
         screener: renderScreener,
         heatmap: renderHeatmap,
         seasonals: () => renderSeasonals(bottom, app),
+        correlation: () => renderCorrelation(bottom, app),
         financials: () => renderFinancials(bottom, app),
+        optionchain: renderOptionChain,
+        indiaflows: renderIndiaFlows,
         paper: renderPaper,
         editor: renderEditor,
       })[bottomTab]();
@@ -273,7 +279,7 @@ export function initPanels(app) {
   }
   function renderWatchlist() {
     const names = Object.keys(app.state.watchlists);
-    side.innerHTML = `<div class="wl-head"><select class="in" id="wlSel">${names.map((n) => `<option ${n === app.state.activeWatchlist ? "selected" : ""}>${esc(n)}</option>`).join("")}</select><button class="btn small wl-add-symbol" id="wlAdd" title="Add symbol" aria-label="Add symbol">＋</button><button class="btn small" id="wlNew" title="New list">+ List</button><button class="btn small" id="wlDel" title="Delete this list">Delete</button></div><div id="wlRows"></div>`;
+    side.innerHTML = `<div class="wl-head"><select class="in" id="wlSel">${names.map((n) => `<option ${n === app.state.activeWatchlist ? "selected" : ""}>${esc(n)}</option>`).join("")}</select><button class="btn small wl-add-symbol" id="wlAddOpen" title="Browse all symbols" aria-label="Browse all symbols">＋</button><button class="btn small" id="wlNew" title="New list">+ List</button><button class="btn small" id="wlDel" title="Delete this list">Delete</button></div><div class="wl-search"><input class="in" id="wlAdd" placeholder="Search or add a symbol" autocomplete="off" role="combobox" aria-expanded="false" aria-controls="wlSuggestions"><div id="wlSuggestions" class="wl-suggestions hidden" role="listbox"></div></div><div id="wlRows"></div>`;
     $("#wlSel").onchange = (e) => {
       app.state.activeWatchlist = e.target.value;
       app.persist();
@@ -296,6 +302,45 @@ export function initPanels(app) {
       app.persist();
       renderWatchlist();
     };
+    const addInput = $("#wlAdd"), suggestions = $("#wlSuggestions");
+    let matches = [], activeMatch = 0, searchTimer, searchSeq = 0;
+    const hideSuggestions = () => { suggestions.classList.add("hidden"); addInput.setAttribute("aria-expanded", "false"); };
+    const showMatches = (rows) => {
+      matches = rows || [];
+      if (!matches.length) {
+        suggestions.innerHTML = addInput.value.trim() ? '<div class="wl-no-suggestions">No matches. Press Enter to try this symbol.</div>' : "";
+      } else {
+        suggestions.innerHTML = matches.map((r, i) => `<button type="button" class="wl-suggestion ${i === activeMatch ? "active" : ""}" role="option" data-index="${i}"><b>${esc(ticker(r.symbol))}</b><span>${esc(r.name || "")} · ${esc(r.exchange || "")}</span><small>＋ Add</small></button>`).join("");
+      }
+      suggestions.classList.toggle("hidden", !addInput.value.trim());
+      addInput.setAttribute("aria-expanded", String(Boolean(addInput.value.trim())));
+    };
+    const searchSymbols = async () => {
+      const term = addInput.value.trim(), request = ++searchSeq;
+      if (!term) { showMatches([]); return; }
+      suggestions.innerHTML = '<div class="wl-no-suggestions">Searching…</div>';
+      suggestions.classList.remove("hidden");
+      addInput.setAttribute("aria-expanded", "true");
+      try {
+        const rows = await api.search(term);
+        if (request !== searchSeq || addInput.value.trim() !== term) return;
+        activeMatch = 0;
+        showMatches(rows);
+      } catch {
+        if (request === searchSeq) showMatches([]);
+      }
+    };
+    addInput.oninput = () => { clearTimeout(searchTimer); searchTimer = setTimeout(searchSymbols, 180); };
+    addInput.onkeydown = async (e) => {
+      if (e.key === "ArrowDown" && matches.length) { activeMatch = Math.min(activeMatch + 1, matches.length - 1); showMatches(matches); e.preventDefault(); }
+      else if (e.key === "ArrowUp" && matches.length) { activeMatch = Math.max(activeMatch - 1, 0); showMatches(matches); e.preventDefault(); }
+      else if (e.key === "Escape") hideSuggestions();
+      else if (e.key === "Enter") { e.preventDefault(); await addSymbol(matches[activeMatch]?.symbol || addInput.value); }
+    };
+    suggestions.onclick = async (e) => {
+      const option = e.target.closest("[data-index]");
+      if (option) await addSymbol(matches[Number(option.dataset.index)]?.symbol);
+    };
     const addSymbol = async (raw) => {
       if (!raw?.trim()) return;
       try {
@@ -309,13 +354,17 @@ export function initPanels(app) {
         drawRows();
         refreshQuotes();
         app.toast(`${ticker(r.id)} added to ${app.state.activeWatchlist}.`);
+        addInput.value = "";
+        matches = [];
+        suggestions.innerHTML = "";
+        hideSuggestions();
         return true;
       } catch (err) {
         app.toast(err.message, "err");
         return false;
       }
     };
-    $("#wlAdd").onclick = () => app.openAddSymbolSearch(addSymbol, () => wlSymbols());
+    $("#wlAddOpen").onclick = () => app.openAddSymbolSearch(addSymbol, (symbol) => wlSymbols().includes(symbol));
     $("#wlRows").onclick = (e) => {
       const row = e.target.closest(".wl-row");
       if (!row) return;
@@ -526,7 +575,12 @@ export function initPanels(app) {
         }).join("") || '<div class="pad hint-text">Nothing at this impact level this week.</div>';
         return;
       }
-      const rows = (await api.get(`/api/${calView}?days=5`)).filter((r) => !calMine || mine.has(r.symbol));
+      let rows = await api.get(`/api/${calView}?days=5`);
+      if (calView === "earnings") {
+        const india = await api.get("/api/india-earnings").catch(() => []);
+        rows = [...rows, ...india];
+      }
+      rows = rows.filter((r) => !calMine || mine.has(r.symbol));
       rows.sort((x, y) => x.date.localeCompare(y.date) || (mine.has(y.symbol) - mine.has(x.symbol)) || (y.marketCap || 0) - (x.marketCap || 0));
       let day = "";
       list.className = "";
@@ -534,7 +588,7 @@ export function initPanels(app) {
         const head = r.date !== day ? dayHead(fmtDay((day = r.date))) : "";
         const star = mine.has(r.symbol) ? ' <span class="up" title="On your watchlist">●</span>' : "";
         const sub = calView === "earnings"
-          ? `${esc(r.when)}${r.epsForecast ? ` · EPS forecast ${esc(r.epsForecast)}` : ""}${r.lastYearEps ? ` · last year ${esc(r.lastYearEps)}` : ""}${r.marketCap ? ` · cap ${fmtNum(r.marketCap)}` : ""}`
+          ? `${esc(r.when)}${r.epsForecast ? ` · EPS forecast ${esc(r.epsForecast)}` : ""}${r.lastYearEps ? ` · last year ${esc(r.lastYearEps)}` : ""}${r.marketCap ? ` · cap ${fmtNum(r.marketCap)}` : ""}${r.description ? ` · ${esc(r.description)}` : ""}`
           : `${r.amount != null ? `${fmtPrice(r.amount)} a share` : ""}${r.payDate ? ` · paid ${esc(r.payDate)}` : ""}${r.annual ? ` · ${fmtPrice(r.annual)} a year` : ""}`;
         return `${head}<div class="card cal-row" data-sym="${esc(r.symbol)}" style="cursor:pointer"><div class="top"><span><b>${esc(r.ticker)}</b>${star} <span class="muted">${esc((r.name || "").slice(0, 34))}</span></span></div><div class="sub">${sub}</div></div>`;
       }).join("") || `<div class="pad hint-text">${calMine ? "None of your watchlist symbols in the next five trading days." : "Nothing listed for the next five trading days."}</div>`;
@@ -614,7 +668,7 @@ export function initPanels(app) {
       ${group("entryLong", "Buy (enter long) when")}${group("exitLong", "Sell (exit long) when")}${group("entryShort", "Enter short when")}${group("exitShort", "Exit short when")}
       <h4>Exits</h4><div class="row-flex"><label class="field">Exit when<select class="in" data-s="exitMatch"><option value="all"${tState.settings.exitMatch === "any" ? "" : " selected"}>all exit conditions are true</option><option value="any"${tState.settings.exitMatch === "any" ? " selected" : ""}>any one exit condition is true</option></select></label>${num("maxBarsInTrade", "Exit after this many bars (0 = off)", 1)}</div>
       <h4>Risk</h4><div class="row-flex">${num("stopLossPct", "Stop loss %")}${num("takeProfitPct", "Take profit %")}${num("trailingStopPct", "Trailing stop %")}</div>
-      <h4>Money</h4><div class="row-flex">${num("initialCapital", "Starting capital")}${num("positionPct", "Position size %")}${num("feePct", "Fee % per side")}${num("slippagePct", "Slippage % per side")}${num("spreadPct", "Spread % (bid to ask)")}<button class="btn small" id="tSpread" title="Read the live bid and ask (crypto)">Live spread</button></div>
+      <h4>Money</h4><div class="row-flex">${num("initialCapital", `Starting capital (${isIndianSymbol(app.active?.cfg.symbol) ? "₹" : "$"})`)}${num("positionPct", "Position size %")}${num("feePct", "Fee % per side")}${num("slippagePct", "Slippage % per side")}${num("spreadPct", "Spread % (bid to ask)")}<button class="btn small" id="tSpread" title="Read the live bid and ask (crypto)">Live spread</button></div>
       <h4>Fills inside a bar</h4><div class="row-flex"><label class="field">Stops and targets<select class="in" data-s="intrabar">${[
         ["worst", "Stop first when a bar touches both (cautious)"],
         ["ohlc", "TradingView's path: open, nearer extreme, far extreme, close"],
@@ -802,7 +856,7 @@ export function initPanels(app) {
       `<div class="stat"><div class="k">${k}</div><div class="v ${cls}">${v ?? "—"}</div></div>`;
     const pc = (v) => (v == null ? "—" : `${v >= 0 ? "+" : ""}${v}%`);
     out.innerHTML = `<div class="row-flex"><b>${esc(ticker(r.symbol))} ${esc(r.tf)}</b><span class="hint-text">${r.bars.length} bars · ${new Date(r.bars[0].time * 1000).toLocaleDateString()} to ${new Date(r.bars.at(-1).time * 1000).toLocaleDateString()} · ${esc(s.feesAndSlippage)} · ${esc(s.fills)}</span><span class="spacer"></span><button class="btn small" id="tCsv">Export trades (CSV)</button><button class="btn small" id="tClear">Clear chart marks</button></div>
-      <div class="stats">${stat("Net profit", pc(s.netProfitPct), s.netProfitPct >= 0 ? "up" : "down")}${stat("Buy and hold", pc(s.buyHoldPct), s.buyHoldPct >= 0 ? "up" : "down")}${stat("Max drawdown", s.maxDrawdownPct == null ? "—" : `-${s.maxDrawdownPct}%`, "down")}${stat("Trades", s.totalTrades)}${stat("Win rate", s.winRatePct == null ? "—" : `${s.winRatePct}%`)}${stat("Profit factor", s.profitFactor)}${stat("Sharpe", s.sharpe)}${stat("Sortino", s.sortino)}${stat("Avg trade", pc(s.avgTradePct))}${stat("Time in market", s.exposurePct == null ? "—" : `${s.exposurePct}%`)}</div>
+      <div class="stats">${stat("Net profit", pc(s.netProfitPct), s.netProfitPct >= 0 ? "up" : "down")}${stat("CAGR", pc(s.cagrPct))}${stat("Buy and hold", pc(s.buyHoldPct), s.buyHoldPct >= 0 ? "up" : "down")}${stat("Max drawdown", s.maxDrawdownPct == null ? "—" : `-${s.maxDrawdownPct}%`, "down")}${stat("Trades", s.totalTrades)}${stat("Win rate", s.winRatePct == null ? "—" : `${s.winRatePct}%`)}${stat("Profit factor", s.profitFactor)}${stat("Sharpe", s.sharpe)}${stat("Sortino", s.sortino)}${stat("Avg trade", pc(s.avgTradePct))}${stat("Time in market", s.exposurePct == null ? "—" : `${s.exposurePct}%`)}</div>
       <div class="equity" id="tEq"></div>
       <div id="tQuant"></div>
       <div id="tPtq"></div>
@@ -812,7 +866,7 @@ export function initPanels(app) {
         .slice(0, 300)
         .map(
           (t) =>
-            `<tr data-t="${t.entryTime}"><td>${t.side}</td><td>${new Date(t.entryTime * 1000).toLocaleString()}</td><td>${new Date(t.exitTime * 1000).toLocaleString()}</td><td>${fmtPrice(t.entryPrice)}</td><td>${fmtPrice(t.exitPrice)}</td><td class="${t.pnl >= 0 ? "up" : "down"}">${t.pnlPct.toFixed(2)}%</td><td>${t.bars}</td><td class="l">${esc(t.exitReason)}</td></tr>`,
+            `<tr data-t="${t.entryTime}"><td>${t.side}</td><td>${new Date(t.entryTime * 1000).toLocaleString()}</td><td>${new Date(t.exitTime * 1000).toLocaleString()}</td><td>${formatSymbolPrice(r.symbol, t.entryPrice)}</td><td>${formatSymbolPrice(r.symbol, t.exitPrice)}</td><td class="${t.pnl >= 0 ? "up" : "down"}">${t.pnlPct.toFixed(2)}%</td><td>${t.bars}</td><td class="l">${esc(t.exitReason)}</td></tr>`,
         )
         .join("")}</tbody></table>`;
     $("#tCsv").onclick = () =>
@@ -865,10 +919,11 @@ export function initPanels(app) {
 
   // ======================= SCREENER =======================
   const sc = {
-    universe: "crypto",
+    universe: "nifty50",
     rows: [],
     sort: "volume",
     dir: -1,
+    visible: 500,
     filters: {},
     scan: null,
     rule: {
@@ -877,7 +932,9 @@ export function initPanels(app) {
       right: { kind: "value", v: 30 },
     },
     tf: "1D",
+    tech: {},
   };
+  app.state.savedScans ||= [];
   async function loadScreener() {
     $("#scTable").innerHTML = '<div class="pad hint-text">Loading…</div>';
     try {
@@ -920,17 +977,20 @@ export function initPanels(app) {
     const n = (k, label, w = 80) =>
       `<label class="field">${label}<input data-f="${k}" type="number" step="any" style="width:${w}px" value="${sc.filters[k] ?? ""}"></label>`;
     bottom.innerHTML = `<div class="pad"><div class="row-flex">
-      <label class="field">Market<select id="scU"><option value="crypto">Crypto (USDT pairs)</option><option value="us">US stocks</option><option value="etf">US ETFs</option></select></label>
+      <label class="field">Market<select id="scU"><option value="crypto">Crypto (USDT pairs)</option><option value="us">US stocks</option><option value="etf">US ETFs</option><option value="india">All Indian stocks</option><option value="nifty50">Nifty 50</option><option value="nifty100">Nifty 100</option><option value="nifty500">Nifty 500</option><option value="sensex">Sensex</option></select></label>
       <label class="field">Search<input data-f="q" value="${esc(sc.filters.q || "")}" style="width:120px"></label>
-      ${n("minPrice", "Price from")}${n("maxPrice", "Price to")}${n("minChg", "Change % from", 70)}${n("maxChg", "Change % to", 70)}${n("minVol", "Min volume", 100)}${sc.universe !== "crypto" ? n("minCap", "Min market cap", 110) : ""}
+      ${n("minPrice", sc.universe === "india" ? "Price from (₹)" : "Price from")}${n("maxPrice", sc.universe === "india" ? "Price to (₹)" : "Price to")}${n("minChg", "Change % from", 70)}${n("maxChg", "Change % to", 70)}${n("minVol", "Min volume", 100)}${sc.universe !== "crypto" ? n("minCap", sc.universe === "india" ? "Min market cap (₹)" : "Min market cap", 110) : ""}
       ${sectors.length > 1 ? `<label class="field">Sector<select data-f="sector"><option value="">All</option>${sectors.map((s) => `<option ${s === sc.filters.sector ? "selected" : ""}>${esc(s)}</option>`).join("")}</select></label>` : ""}
       <button class="btn" id="scRefresh" style="align-self:end">Refresh</button></div>
-      <div class="row-flex" style="margin-top:8px"><span class="hint-text">Technical filter:</span><div class="rules" id="scRule" style="margin:0">${ruleHtml(sc.rule)}</div><label class="field">On<select id="scTf">${["1h", "4h", "1D", "1W"].map((t) => `<option ${t === sc.tf ? "selected" : ""}>${t}</option>`).join("")}</select></label><button class="btn primary" id="scScan" style="align-self:end">Scan top 100</button>${sc.scan ? '<button class="btn" id="scClear" style="align-self:end">Clear scan</button>' : ""}</div></div>
+      <div class="row-flex" style="margin-top:8px"><span class="hint-text">Technical rule:</span><div class="rules" id="scRule" style="margin:0">${ruleHtml(sc.rule)}</div><label class="field">Timeframe<select id="scTf">${["1h", "4h", "1D", "1W"].map((t) => `<option ${t === sc.tf ? "selected" : ""}>${t}</option>`).join("")}</select></label><button class="btn primary" id="scScan" style="align-self:end">Scan up to 500</button>${sc.scan ? '<button class="btn" id="scClear" style="align-self:end">Clear scan</button>' : ""}<button class="btn" id="scBreadth" style="align-self:end">Market breadth</button></div>
+      <div class="row-flex" style="margin-top:8px"><span class="hint-text">Quick filters:</span><label class="field">RSI min<input data-tech="rsiMin" type="number" min="0" max="100" value="${sc.tech.rsiMin ?? ""}" style="width:70px"></label><label class="field">RSI max<input data-tech="rsiMax" type="number" min="0" max="100" value="${sc.tech.rsiMax ?? ""}" style="width:70px"></label><label class="field">Price vs EMA<select data-tech="ema"><option value="">Any</option><option value="above50" ${sc.tech.ema === "above50" ? "selected" : ""}>Above 50</option><option value="below50" ${sc.tech.ema === "below50" ? "selected" : ""}>Below 50</option><option value="above200" ${sc.tech.ema === "above200" ? "selected" : ""}>Above 200</option><option value="below200" ${sc.tech.ema === "below200" ? "selected" : ""}>Below 200</option></select></label><label class="field">Volume spike x<input data-tech="volumeSpike" type="number" min="1" step="0.1" value="${sc.tech.volumeSpike ?? ""}" style="width:70px"></label><label class="field">52-week<select data-tech="week52"><option value="">Any</option><option value="high" ${sc.tech.week52 === "high" ? "selected" : ""}>Within 5% high</option><option value="low" ${sc.tech.week52 === "low" ? "selected" : ""}>Within 5% low</option></select></label><label class="field">Supertrend flip<select data-tech="supertrendFlip"><option value="">Any</option><option value="up" ${sc.tech.supertrendFlip === "up" ? "selected" : ""}>Bullish</option><option value="down" ${sc.tech.supertrendFlip === "down" ? "selected" : ""}>Bearish</option></select></label><label class="field">MACD cross<select data-tech="macdCross"><option value="">Any</option><option value="bullish" ${sc.tech.macdCross === "bullish" ? "selected" : ""}>Bullish</option><option value="bearish" ${sc.tech.macdCross === "bearish" ? "selected" : ""}>Bearish</option></select></label></div>
+      <div class="row-flex" style="margin-top:8px"><input class="in" id="scSaveName" placeholder="Name this scan" style="width:160px"><button class="btn" id="scSave">Save scan</button><select class="in" id="scSaved"><option value="">Saved scans…</option>${app.state.savedScans.map((s,i)=>`<option value="${i}">${esc(s.name)}</option>`).join("")}</select><button class="btn" id="scGainers">Top gainers</button><button class="btn" id="scLosers">Top losers</button><button class="btn" id="scActive">Most active</button></div><div id="scBreadthResult" class="hint-text" style="margin-top:6px"></div></div>
       <div id="scTable"></div>`;
     $("#scU").value = sc.universe;
     $("#scU").onchange = (e) => {
       sc.universe = e.target.value;
       sc.filters = {};
+      sc.visible = 500;
       renderScreener();
       loadScreener();
     };
@@ -942,9 +1002,39 @@ export function initPanels(app) {
         drawScreener();
       };
     });
+    bottom.querySelectorAll("[data-tech]").forEach((el) => {
+      el.onchange = () => {
+        const v = el.value.trim();
+        sc.tech[el.dataset.tech] = v === "" ? null : el.type === "number" ? Number(v) : v;
+      };
+    });
     bindRules($("#scRule"));
     $("#scRule .x")?.remove();
     $("#scRefresh").onclick = loadScreener;
+    $("#scGainers").onclick = () => { sc.sort = "changePct"; sc.dir = -1; drawScreener(); };
+    $("#scLosers").onclick = () => { sc.sort = "changePct"; sc.dir = 1; drawScreener(); };
+    $("#scActive").onclick = () => { sc.sort = "volume"; sc.dir = -1; drawScreener(); };
+    $("#scSave").onclick = () => {
+      const name = $("#scSaveName").value.trim();
+      if (!name) return app.toast("Enter a name for the scan.", "err");
+      app.state.savedScans = app.state.savedScans.filter((s) => s.name !== name);
+      app.state.savedScans.push({ name, universe: sc.universe, filters: structuredClone(sc.filters), tech: structuredClone(sc.tech), rule: structuredClone(sc.rule), tf: sc.tf });
+      app.persist(); renderScreener();
+    };
+    $("#scSaved").onchange = (e) => {
+      const s = app.state.savedScans[Number(e.target.value)]; if (!s) return;
+      sc.universe = s.universe; sc.filters = structuredClone(s.filters || {}); sc.tech = structuredClone(s.tech || {}); sc.rule = structuredClone(s.rule || sc.rule); sc.tf = s.tf || "1D"; sc.scan = null;
+      renderScreener(); loadScreener();
+    };
+    $("#scBreadth").onclick = async () => {
+      const out = $("#scBreadthResult"); out.textContent = `Calculating breadth for ${Math.min(sc.rows.length, 500)} stocks…`;
+      try {
+        const r = await api.post("/api/scan", { symbols: sc.rows.slice(0,500).map(x=>x.symbol), tf: "1D", metrics: true, rules: [] });
+        const good = r.filter(x=>x.metrics), adv = good.filter(x=>x.metrics.changePct>0).length, dec = good.filter(x=>x.metrics.changePct<0).length;
+        const e50 = good.filter(x=>x.metrics.aboveEMA50).length, e200 = good.filter(x=>x.metrics.aboveEMA200).length;
+        out.textContent = `Market breadth · ${good.length} stocks: advances ${adv}, declines ${dec} (A/D ${dec ? (adv/dec).toFixed(2) : "∞"}) · above EMA 50: ${e50} (${good.length ? (100*e50/good.length).toFixed(1) : 0}%) · above EMA 200: ${e200} (${good.length ? (100*e200/good.length).toFixed(1) : 0}%).`;
+      } catch(err) { out.textContent = `Breadth unavailable: ${err.message}`; }
+    };
     $("#scClear") &&
       ($("#scClear").onclick = () => {
         sc.scan = null;
@@ -957,10 +1047,7 @@ export function initPanels(app) {
       const c = compileRules({ rules: [rule] });
       const prev = sc.scan;
       sc.scan = null;
-      const targets = filtered()
-        .sort((a, b) => b.volume - a.volume)
-        .slice(0, 100)
-        .map((r) => r.symbol);
+      const targets = filtered().slice(0, 500).map((r) => r.symbol);
       sc.scan = prev;
       $("#scScan").textContent = `Scanning ${targets.length}…`;
       try {
@@ -969,6 +1056,8 @@ export function initPanels(app) {
           tf: sc.tf,
           indicators: c.indicators,
           rules: c.rules,
+          metrics: true,
+          metricFilters: Object.fromEntries(Object.entries(sc.tech).filter(([,v])=>v!=null&&v!=="")),
         });
         sc.scan = Object.fromEntries(res.map((x) => [x.symbol, x]));
         const hits = res.filter((x) => x.pass).length;
@@ -985,6 +1074,7 @@ export function initPanels(app) {
     const box = $("#scTable");
     if (!box) return;
     const rows = filtered();
+    const withMetrics = !!sc.scan && rows.some((r) => sc.scan[r.symbol]?.metrics);
     const cols = [
       ["ticker", "Symbol"],
       ["name", "Name"],
@@ -997,16 +1087,36 @@ export function initPanels(app) {
             ["sector", "Sector"],
           ]
         : []),
+      ...(withMetrics ? [["rsi", "RSI"], ["ema", "vs EMA 50"], ["volumeSpike", "Vol ×"], ["high52DistancePct", "52w high %"], ["supertrendFlip", "ST flip"], ["macdCross", "MACD"]] : []),
     ];
     box.innerHTML = `<table class="t"><thead><tr>${cols.map(([k, l]) => `<th data-k="${k}" class="${k === "name" || k === "sector" ? "l" : ""}">${l}${sc.sort === k ? (sc.dir < 0 ? " ↓" : " ↑") : ""}</th>`).join("")}</tr></thead><tbody>${rows
-      .slice(0, 500)
+      .slice(0, sc.visible)
       .map(
         (r) =>
-          `<tr data-s="${esc(r.symbol)}"><td><b>${esc(r.ticker)}</b></td><td class="l muted">${esc((r.name || "").slice(0, 40))}</td><td>${fmtPrice(r.price)}</td><td class="${r.changePct >= 0 ? "up" : "down"}">${fmtPct(r.changePct)}</td><td>${fmtNum(r.volume, 0)}</td>${sc.universe !== "crypto" ? `<td>${fmtNum(r.marketCap, 0)}</td><td class="l muted">${esc(r.sector)}</td>` : ""}</tr>`,
+          `<tr data-s="${esc(r.symbol)}"><td><b>${esc(r.ticker)}</b></td><td class="l muted">${esc((r.name || "").slice(0, 40))}</td><td>${formatSymbolPrice(r.symbol, r.price)}</td><td class="${r.changePct >= 0 ? "up" : "down"}">${fmtPct(r.changePct)}</td><td>${fmtNum(r.volume, 0)}</td>${sc.universe !== "crypto" ? `<td>${/^india|nifty|sensex/.test(sc.universe) ? "₹" : ""}${fmtNum(r.marketCap, 0)}</td><td class="l muted">${esc(r.sector || r.exchange || "")}</td>` : ""}${withMetrics ? (()=>{const m=sc.scan[r.symbol]?.metrics||{};return `<td>${Number.isFinite(m.rsi)?m.rsi.toFixed(1):"—"}</td><td>${m.aboveEMA50?"Above":"Below"}</td><td>${Number.isFinite(m.volumeSpike)?`${m.volumeSpike.toFixed(1)}×`:"—"}</td><td>${Number.isFinite(m.high52DistancePct)?`${m.high52DistancePct.toFixed(1)}%`:"—"}</td><td>${esc(m.supertrendFlip||"—")}</td><td>${esc(m.macdCross||"—")}</td>`;})():""}</tr>`,
       )
       .join(
         "",
-      )}</tbody></table><div class="pad hint-text">${rows.length} match${rows.length === 1 ? "" : "es"}${rows.length > 500 ? " (showing 500)" : ""}. Click a row to open its chart.${sc.universe !== "crypto" ? " Live prices for the 200 largest companies; the rest show the last close." : ""}</div>`;
+      )}</tbody></table><div class="pad hint-text">${rows.length} match${rows.length === 1 ? "" : "es"}${rows.length > 500 ? " (showing 500)" : ""}. Click a row to open its chart.${sc.universe === "us" || sc.universe === "etf" ? " Live prices for the 200 largest companies; the rest show the last close." : sc.universe === "india" && rows.some((r) => !r.live) ? " Some prices are last close or unavailable when Yahoo Finance has no quote." : ""}</div>`;
+    const note = box.querySelector(".pad.hint-text");
+    if (note) {
+      const availability = sc.universe === "us" || sc.universe === "etf"
+        ? " Live prices cover the 200 largest companies; other rows use last-close data."
+        : sc.universe === "india" && rows.some((r) => !r.live)
+          ? " Some prices may be delayed or unavailable from Yahoo Finance."
+          : "";
+      note.textContent = `${rows.length} matches. Showing ${Math.min(rows.length, sc.visible)} of ${rows.length}.${availability} `;
+    }
+    if (note && rows.length > sc.visible) {
+      const more = document.createElement("button");
+      more.className = "btn small";
+      more.textContent = "Show next 500";
+      more.onclick = () => {
+        sc.visible += 500;
+        drawScreener();
+      };
+      note.append(more);
+    }
     box.querySelector("thead").onclick = (e) => {
       const k = e.target.closest("th")?.dataset.k;
       if (!k) return;
@@ -1021,11 +1131,68 @@ export function initPanels(app) {
   }
 
   // ======================= HEATMAP =======================
-  const hm = { universe: "us", size: "marketCap" };
+  async function renderOptionChain() {
+    const current = ticker(app.active?.cfg.symbol || "YAHOO:^NSEI").replace(/\.(NS|BO)$/i, "");
+    bottom.innerHTML = `<div class="pad"><div class="row-flex"><label class="field">NSE index or F&amp;O stock<input class="in" id="ocSymbol" value="${esc(["^NSEI", "^NIFTY"].includes(current) ? "NIFTY" : current)}" placeholder="NIFTY, BANKNIFTY, RELIANCE"></label><button class="btn primary" id="ocLoad">Load option chain</button><button class="btn" id="ocBroker">Broker API settings</button><span class="hint-text" id="ocStatus">NSE public data · delayed as published</span></div><div id="ocSummary" class="stats"></div><div id="ocChart" style="height:150px;overflow:hidden"></div><div id="ocTable" style="overflow:auto;max-height:calc(100% - 220px)"></div><p class="hint-text">NSE public endpoints may rate limit or block automated requests. If blocked, configure a broker API in Settings. Option chain availability and freshness depend on the source.</p></div>`;
+    const load = async () => {
+      const status = $("#ocStatus"), symbol = $("#ocSymbol").value.trim();
+      status.textContent = "Loading public NSE option chain…";
+      $("#ocTable").innerHTML = "";
+      try {
+        const d = await api.get(`/api/india/option-chain?symbol=${encodeURIComponent(symbol)}${status.dataset.source === "broker" ? "&source=broker" : ""}`);
+        status.dataset.source = "";
+        status.textContent = `${d.source} · ${new Date(d.asOf).toLocaleTimeString()} · ${d.expiry || "current expiry"}`;
+        $("#ocSummary").innerHTML = [["Underlying", d.underlying == null ? "—" : `₹${fmtPrice(d.underlying)}`], ["PCR (OI)", d.pcr == null ? "—" : d.pcr.toFixed(2)], ["Max pain", d.maxPain == null ? "—" : `₹${fmtPrice(d.maxPain)}`], ["Expiry", d.expiry || "—"]].map(([k,v]) => `<div class="stat"><div class="k">${k}</div><div class="v">${v}</div></div>`).join("");
+        const max = Math.max(1, ...d.strikes.flatMap((r) => [r.call?.oi || 0, r.put?.oi || 0]));
+        $("#ocChart").innerHTML = `<div style="display:flex;height:100%;align-items:end;gap:2px;padding:10px 2px">${d.strikes.map((r) => `<div title="${r.strike}: CE ${fmtNum(r.call?.oi || 0,0)} / PE ${fmtNum(r.put?.oi || 0,0)}" style="display:flex;align-items:end;gap:1px;flex:1;height:100%"><i style="height:${Math.max(2,(r.call?.oi||0)/max*100)}%;background:#ef5350;flex:1"></i><i style="height:${Math.max(2,(r.put?.oi||0)/max*100)}%;background:#26a69a;flex:1"></i></div>`).join("")}</div><div class="hint-text">Open interest by strike · <span class="down">Calls</span> / <span class="up">Puts</span></div>`;
+        $("#ocTable").innerHTML = `<table class="t"><thead><tr><th colspan="4">CALLS</th><th>STRIKE</th><th colspan="4">PUTS</th></tr><tr><th>OI</th><th>Change OI</th><th>IV</th><th>LTP</th><th></th><th>LTP</th><th>IV</th><th>Change OI</th><th>OI</th></tr></thead><tbody>${d.strikes.map((r) => `<tr><td>${fmtNum(r.call?.oi||0,0)}</td><td>${fmtNum(r.call?.changeOi||0,0)}</td><td>${fmtNum(r.call?.iv||0,2)}</td><td>₹${fmtPrice(r.call?.ltp)}</td><td><b>${fmtNum(r.strike,2)}</b></td><td>₹${fmtPrice(r.put?.ltp)}</td><td>${fmtNum(r.put?.iv||0,2)}</td><td>${fmtNum(r.put?.changeOi||0,0)}</td><td>${fmtNum(r.put?.oi||0,0)}</td></tr>`).join("")}</tbody></table>`;
+      } catch (e) {
+        status.textContent = "NSE public data unavailable";
+        $("#ocSummary").innerHTML = `<div class="hint-text down">${esc(e.message)} <button class="btn small" id="ocTryBroker">Try configured broker</button> <button class="btn small" id="ocBrokerErr">Broker API settings</button></div>`;
+        $("#ocBrokerErr").onclick = () => app.openSettings();
+        $("#ocTryBroker").onclick = () => { status.dataset.source = "broker"; load(); };
+      }
+    };
+    $("#ocLoad").onclick = load;
+    $("#ocBroker").onclick = () => app.openSettings();
+    load();
+  }
+
+  async function renderIndiaFlows() {
+    bottom.innerHTML = '<div class="pad"><div class="row-flex"><button class="btn primary" id="ifLoad">Refresh NSE/BSE reports</button><span class="hint-text" id="ifStatus">Public exchange reports · refresh on demand</span></div><div id="ifData" class="hint-text" style="margin-top:12px">Loading reports…</div></div>';
+    const fmt = (v) => {
+      if (Array.isArray(v)) {
+        if (!v.length) return '<p class="hint-text">No rows reported.</p>';
+        if (typeof v[0] !== "object") return `<pre>${esc(JSON.stringify(v, null, 2))}</pre>`;
+        const keys = [...new Set(v.slice(0, 100).flatMap((r) => Object.keys(r)))].slice(0, 10);
+        return `<div style="overflow:auto;max-height:330px"><table class="t"><thead><tr>${keys.map((k) => `<th>${esc(k)}</th>`).join("")}</tr></thead><tbody>${v.slice(0, 100).map((r) => `<tr>${keys.map((k) => `<td>${esc(r[k] == null ? "" : typeof r[k] === "object" ? JSON.stringify(r[k]) : r[k])}</td>`).join("")}</tr>`).join("")}</tbody></table></div>`;
+      }
+      if (v && typeof v === "object") {
+        const arr = Object.values(v).find(Array.isArray);
+        return arr ? fmt(arr) : `<pre>${esc(JSON.stringify(v, null, 2))}</pre>`;
+      }
+      return '<p class="hint-text">No report returned.</p>';
+    };
+    const load = async () => {
+      $("#ifStatus").textContent = "Fetching public reports…";
+      try {
+        const d = await api.get("/api/india/flows");
+        $("#ifStatus").textContent = `Updated ${new Date(d.asOf).toLocaleString()}`;
+        $("#ifData").innerHTML = `<h3>FII/FPI &amp; DII activity</h3>${d.fiiDii ? fmt(d.fiiDii) : '<p class="hint-text">The NSE FII/DII report could not be loaded.</p>'}<h3>NSE bulk/block deals</h3>${d.nseDeals ? fmt(d.nseDeals) : '<p class="hint-text">NSE deal report unavailable.</p>'}<h3>BSE bulk deals</h3>${d.bseDeals ? fmt(d.bseDeals) : '<p class="hint-text">BSE deal report unavailable.</p>'}${d.errors?.length ? `<h3>Source messages</h3><ul>${d.errors.map((x) => `<li class="hint-text">${esc(x)}</li>`).join("")}</ul>` : ""}<p class="hint-text">Sources: <a target="_blank" rel="noreferrer" href="https://www.nseindia.com/reports/fii-dii">NSE FII/DII</a>, NSE public large-deals reports, and <a target="_blank" rel="noreferrer" href="https://www.bseindia.com/markets/equity/EQReports/bulk_deals.aspx">BSE bulk deals</a>.</p>`;
+      } catch (e) { $("#ifStatus").textContent = e.message; $("#ifData").innerHTML = `<p class="down">${esc(e.message)}</p>`; }
+    };
+    $("#ifLoad").onclick = load;
+    await load();
+  }
+
+  // ======================= HEATMAP =======================
+  const hm = { universe: "nifty50", size: "marketCap", colorBy: "changePct", groupBy: "sector" };
   async function renderHeatmap() {
-    bottom.innerHTML = `<div class="pad row-flex"><label class="field">Market<select id="hmU"><option value="us">US stocks (200 largest)</option><option value="crypto">Crypto (100 most traded)</option></select></label><label class="field">Size by<select id="hmS"><option value="marketCap">Market cap</option><option value="volume">Volume</option></select></label><span class="hint-text" style="align-self:end">Colour = today's change. Click a tile to open its chart.</span></div><div class="heatmap-wrap" style="height:calc(100% - 64px)"><canvas id="hmC"></canvas></div>`;
+    bottom.innerHTML = `<div class="pad row-flex"><label class="field">Market<select id="hmU"><option value="nifty50">Nifty 50</option><option value="sensex">S&amp;P BSE Sensex</option><option value="nifty500">Nifty 500</option><option value="niftynext50">Nifty Next 50</option><option value="india">All India companies</option><option value="us">US stocks (200 largest)</option><option value="crypto">Crypto (100 most traded)</option></select></label><label class="field">Size by<select id="hmS"><option value="marketCap">Market cap</option><option value="volume">Volume</option></select></label><label class="field">Color by<select id="hmCBy"><option value="changePct">Change %</option><option value="volume">Volume</option><option value="price">Price</option></select></label><label class="field">Group by<select id="hmG"><option value="sector">Sector</option><option value="exchange">Exchange</option><option value="none">None</option></select></label><span class="hint-text" style="align-self:end">Tile area, color scale, and grouping update the map. Hover for details; click a tile to open its chart.</span></div><div class="heatmap-wrap" style="height:calc(100% - 76px)"><canvas id="hmC"></canvas></div>`;
     $("#hmU").value = hm.universe;
     $("#hmS").value = hm.size;
+    $("#hmCBy").value = hm.colorBy;
+    $("#hmG").value = hm.groupBy;
     $("#hmU").onchange = (e) => {
       hm.universe = e.target.value;
       renderHeatmap();
@@ -1034,15 +1201,20 @@ export function initPanels(app) {
       hm.size = e.target.value;
       drawHeatmap();
     };
+    $("#hmCBy").onchange = (e) => { hm.colorBy = e.target.value; drawHeatmap(); };
+    $("#hmG").onchange = (e) => { hm.groupBy = e.target.value; drawHeatmap(); };
     try {
       const rows = await api.get(`/api/screener?universe=${hm.universe}`);
+      const indiaMarkets = ["india", "nifty50", "nifty100", "nifty500", "niftynext50", "sensex"];
       hm.rows =
         hm.universe === "us"
           ? rows
               .filter((r) => r.marketCap > 0)
               .sort((a, b) => b.marketCap - a.marketCap)
               .slice(0, 200)
-          : rows.sort((a, b) => b.volume - a.volume).slice(0, 100);
+          : indiaMarkets.includes(hm.universe)
+            ? rows.filter((r) => r.ticker).sort((a, b) => (b.marketCap || b.sizeValue || 0) - (a.marketCap || a.sizeValue || 0)).slice(0, hm.universe === "india" ? rows.length : 500)
+            : rows.sort((a, b) => b.volume - a.volume).slice(0, 100);
       drawHeatmap();
     } catch (e) {
       app.toast(e.message, "err");
@@ -1106,7 +1278,7 @@ export function initPanels(app) {
     const ctx = c.getContext("2d");
     ctx.scale(dpr, dpr);
     ctx.clearRect(0, 0, W, H);
-    const cap = hm.universe === "us" ? 3 : 8;
+    const cap = hm.universe === "crypto" ? 8 : 3;
     const color = (ch) => {
       const t = Math.max(-1, Math.min(1, ch / cap));
       const base = [66, 69, 80],
@@ -1120,13 +1292,14 @@ export function initPanels(app) {
       Math.max(
         1,
         hm.size === "volume"
-          ? r.volume * (hm.universe === "us" ? r.price : 1)
-          : r.marketCap || r.volume,
+          ? r.volume * (hm.universe === "crypto" ? 1 : r.price || 0)
+          : r.marketCap || r.sizeValue || r.volume,
       );
     let tiles = [];
-    if (hm.universe === "us") {
+    if (["us", "india", "nifty50", "nifty100", "nifty500", "niftynext50", "sensex"].includes(hm.universe) && hm.groupBy !== "none") {
       const bySector = {};
-      for (const r of hm.rows) (bySector[r.sector || "Other"] ||= []).push(r);
+      const sectorFor = (r) => hm.groupBy === "exchange" ? (r.exchange || "Other") : (r.sector && r.sector !== "Other" ? r.sector : ({ "ADANIENT":"Conglomerates", "ADANIPORTS":"Infrastructure", "APOLLOHOSP":"Healthcare", "ASIANPAINT":"Consumer", "AXISBANK":"Financials", "BAJAJ-AUTO":"Automobiles", "BAJFINANCE":"Financials", "BAJAJFINSV":"Financials", "BEL":"Industrials", "BHARTIARTL":"Telecom", "CIPLA":"Healthcare", "COALINDIA":"Energy", "DRREDDY":"Healthcare", "EICHERMOT":"Automobiles", "ETERNAL":"Consumer", "GRASIM":"Materials", "HCLTECH":"Information Technology", "HDFCBANK":"Financials", "HDFCLIFE":"Financials", "HEROMOTOCO":"Automobiles", "HINDALCO":"Materials", "HINDUNILVR":"Consumer", "ICICIBANK":"Financials", "INDUSINDBK":"Financials", "INFY":"Information Technology", "ITC":"Consumer", "JIOFIN":"Financials", "JSWSTEEL":"Materials", "KOTAKBANK":"Financials", "LT":"Industrials", "M&M":"Automobiles", "MARUTI":"Automobiles", "NESTLEIND":"Consumer", "NTPC":"Utilities", "ONGC":"Energy", "POWERGRID":"Utilities", "RELIANCE":"Energy", "SBILIFE":"Financials", "SBIN":"Financials", "SHRIRAMFIN":"Financials", "SUNPHARMA":"Healthcare", "TATACONSUM":"Consumer", "TATASTEEL":"Materials", "TCS":"Information Technology", "TECHM":"Information Technology", "TITAN":"Consumer", "TRENT":"Retail", "ULTRACEMCO":"Materials", "WIPRO":"Information Technology" }[r.ticker] || "Other"));
+      for (const r of hm.rows) (bySector[sectorFor(r)] ||= []).push(r);
       const groups = Object.entries(bySector)
         .map(([name, rs]) => ({
           name,
@@ -1135,14 +1308,16 @@ export function initPanels(app) {
         }))
         .sort((a, b) => b.value - a.value);
       for (const g of squarify(groups, 0, 0, W, H)) {
+        const headerH = Math.min(15, Math.max(0, g.h - 3));
+        if (g.w < 4 || g.h < 4) continue;
         const inner = squarify(
           g.rs
             .map((r) => ({ ...r, value: val(r) }))
             .sort((a, b) => b.value - a.value),
           g.x + 1,
-          g.y + 14,
+          g.y + headerH,
           g.w - 2,
-          g.h - 15,
+          g.h - headerH - 1,
         );
         tiles.push(...inner);
         ctx.fillStyle = css("--panel");
@@ -1150,7 +1325,7 @@ export function initPanels(app) {
         ctx.fillStyle = css("--muted");
         ctx.font = "600 10px -apple-system, Segoe UI, sans-serif";
         ctx.textBaseline = "top";
-        if (g.w > 50)
+        if (g.w > 50 && g.h > 10)
           ctx.fillText(
             g.name.toUpperCase().slice(0, Math.floor(g.w / 7)),
             g.x + 4,
@@ -1167,28 +1342,39 @@ export function initPanels(app) {
         W,
         H,
       );
+    const sortedVolumes = hm.rows.map((r) => Math.max(0, Number(r.volume) || 0)).sort((a, b) => a - b);
+    const medianVolume = sortedVolumes[Math.floor(sortedVolumes.length / 2)] || 1;
+    const prices = hm.rows.map((r) => Number(r.price) || 0).filter((p) => p > 0);
+    const minPrice = Math.min(...prices), maxPrice = Math.max(...prices);
+    const colorMetric = (r) => hm.colorBy === "volume" ? Math.max(-3, Math.min(3, Math.log2((Number(r.volume) || 1) / medianVolume))) : hm.colorBy === "price" ? (maxPrice > minPrice ? ((Number(r.price) - minPrice) / (maxPrice - minPrice) * 6 - 3) : 0) : (Number(r.changePct) || 0);
+    const colorCap = hm.colorBy === "changePct" ? (hm.universe === "crypto" ? 8 : 3) : 3;
     for (const t of tiles) {
-      ctx.fillStyle = color(t.changePct);
+      ctx.fillStyle = color(colorMetric(t) * (3 / colorCap));
       ctx.fillRect(t.x + 0.5, t.y + 0.5, t.w - 1, t.h - 1);
-      if (t.w > 34 && t.h > 22) {
-        const fs = Math.max(10, Math.min(22, Math.sqrt(t.w * t.h) / 5));
+      if (t.w > 23 && t.h > 15) {
+        const fs = Math.max(8, Math.min(20, Math.sqrt(t.w * t.h) / 5));
+        const cx = t.x + t.w / 2, cy = t.y + t.h / 2;
+        ctx.save();
+        ctx.beginPath();
+        ctx.rect(t.x + 2, t.y + 2, t.w - 4, t.h - 4);
+        ctx.clip();
         ctx.fillStyle = "#fff";
         ctx.textAlign = "center";
         ctx.textBaseline = "middle";
-        ctx.font = `600 ${fs}px -apple-system, Segoe UI, sans-serif`;
-        ctx.fillText(
-          t.ticker.replace(/USDT$/, ""),
-          t.x + t.w / 2,
-          t.y + t.h / 2 - (t.h > 40 ? fs * 0.45 : 0),
-        );
-        if (t.h > 40) {
-          ctx.font = `${fs * 0.75}px -apple-system, Segoe UI, sans-serif`;
-          ctx.fillText(
-            fmtPct(t.changePct),
-            t.x + t.w / 2,
-            t.y + t.h / 2 + fs * 0.6,
-          );
+        ctx.font = `700 ${fs}px -apple-system, Segoe UI, sans-serif`;
+        const maxChars = Math.max(3, Math.floor((t.w - 8) / (fs * 0.58)));
+        const name = t.ticker.replace(/USDT$/, "");
+        ctx.fillText(name.length > maxChars ? `${name.slice(0, maxChars - 1)}…` : name, cx, t.h > 40 ? cy - fs * 0.55 : cy);
+        if (t.h > 30) {
+          ctx.font = `600 ${Math.max(8, fs * 0.8)}px -apple-system, Segoe UI, sans-serif`;
+          ctx.fillText(fmtPct(t.changePct), cx, t.h > 55 ? cy + fs * 1.1 : cy + fs * 0.75);
         }
+        const isIndian = ["india", "nifty50", "nifty100", "nifty500", "niftynext50", "sensex"].includes(hm.universe);
+        if (isIndian && t.w > 75 && t.h > 55 && t.price > 0) {
+          ctx.font = `500 ${Math.max(8, fs * 0.72)}px -apple-system, Segoe UI, sans-serif`;
+          ctx.fillText(`₹${fmtPrice(t.price)}`, cx, cy + fs * 2.2);
+        }
+        ctx.restore();
         ctx.textAlign = "left";
       }
     }
@@ -1211,7 +1397,8 @@ export function initPanels(app) {
         tip.className = "tip";
         document.body.appendChild(tip);
       }
-      tip.innerHTML = `<b>${esc(t.ticker)}</b> ${esc(t.name || "")}<br>${fmtPrice(t.price)} <span class="${t.changePct >= 0 ? "up" : "down"}">${fmtPct(t.changePct)}</span>${t.marketCap ? `<br>Market cap ${fmtNum(t.marketCap)}` : ""}`;
+      const indianMap = ["india", "nifty50", "nifty100", "nifty500", "niftynext50", "sensex"].includes(hm.universe);
+      tip.innerHTML = `<b>${esc(t.ticker)}</b> ${esc(t.name || "")}<br>${formatSymbolPrice(t.symbol, t.price)} <span class="${t.changePct >= 0 ? "up" : "down"}">${fmtPct(t.changePct)}</span>${t.marketCap ? `<br>Market cap ${indianMap ? "₹" : ""}${fmtNum(t.marketCap)}` : t.sizeValue ? `<br>Size estimate ${indianMap ? "₹" : ""}${fmtNum(t.sizeValue)}` : ""}${t.sector ? `<br>${esc(t.sector)}` : ""}`;
       tip.style.left = `${e.clientX + 14}px`;
       tip.style.top = `${e.clientY + 14}px`;
     };
@@ -1237,34 +1424,63 @@ export function initPanels(app) {
   // While the active chart is in bar replay, paper trading uses a separate practice account that
   // fills at the replayed bar's prices, so replay trades never mix with the live paper account.
   const replayPane = () => (app.active?.replay ? app.active : null);
-  const freshAccount = () => ({ initial: 100000, cash: 100000, feePct: 0.05, positions: {}, orders: [], history: [] });
-  const paper = () => (replayPane() ? (app.state.replayPaper ||= freshAccount()) : livePaper());
-  const livePaper = () =>
-    (app.state.paper ||= {
+  const freshAccount = (sym) => ({ initial: 100000, cash: 100000, feePct: 0.05, charges: { brokeragePct: 0.03, sttPct: 0.025, exchangePct: 0.00325, gstPct: 18, sebiPct: 0.0001, stampPct: 0.003 }, currency: isIndianSymbol(sym) ? "INR" : "USD", positions: {}, orders: [], history: [], equityCurve: [] });
+  const livePaper = (indian = false) => {
+    const key = indian ? "paperINR" : "paper";
+    const p = (app.state[key] ||= {
       initial: 100000,
       cash: 100000,
       feePct: 0.05,
+      charges: { brokeragePct: 0.03, sttPct: 0.025, exchangePct: 0.00325, gstPct: 18, sebiPct: 0.0001, stampPct: 0.003 },
+      currency: indian ? "INR" : "USD",
       positions: {},
       orders: [],
       history: [],
     });
+    // Existing saved paper accounts predate the currency field and are treated as USD.
+    p.currency ||= indian ? "INR" : "USD";
+    p.charges ||= { brokeragePct: 0.03, sttPct: 0.025, exchangePct: 0.00325, gstPct: 18, sebiPct: 0.0001, stampPct: 0.003 };
+    p.equityCurve ||= [];
+    return p;
+  };
+  const accountForSymbol = (sym, create = true) => {
+    const rp = replayPane();
+    if (rp && sym === rp.cfg.symbol) {
+      const account = create ? (app.state.replayPaper ||= freshAccount(sym)) : app.state.replayPaper;
+      if (account) {
+        account.currency ||= isIndianSymbol(sym) ? "INR" : "USD";
+        account.charges ||= { brokeragePct: 0.03, sttPct: 0.025, exchangePct: 0.00325, gstPct: 18, sebiPct: 0.0001, stampPct: 0.003 };
+        account.equityCurve ||= [];
+      }
+      return account;
+    }
+    const indian = isIndianSymbol(sym);
+    return create ? livePaper(indian) : app.state[indian ? "paperINR" : "paper"];
+  };
+  const paper = () => accountForSymbol(app.active?.cfg.symbol || "");
+  const cash = (value, account) => `${account.currency === "INR" ? "₹" : "$"}${fmtPrice(value)}`;
+  const priceText = (sym, value) => formatSymbolPrice(sym, value);
   const price = (s) => {
     const rp = replayPane();
     if (rp && s === rp.cfg.symbol) return rp.bars[rp.replay.index]?.close;
     return rp ? null : app.prices[s];
   };
   function paperSymbols() {
-    const p = app.state.paper;
-    return p
-      ? [...Object.keys(p.positions), ...p.orders.map((o) => o.symbol)]
-      : [];
+    return [app.state.paper, app.state.paperINR, app.state.replayPaper]
+      .filter(Boolean)
+      .flatMap((p) => [...Object.keys(p.positions || {}), ...(p.orders || []).map((o) => o.symbol)]);
   }
   function fill(sym, side, qty, px, note = "", acct = null) {
-    const p = acct || paper();
-    const rp = acct ? null : replayPane();
+    const p = acct || accountForSymbol(sym);
+    const activeReplay = replayPane();
+    const rp = activeReplay && activeReplay.cfg.symbol === sym ? activeReplay : null;
     const signed = side === "buy" ? qty : -qty;
     const pos = p.positions[sym] || { qty: 0, avg: 0 };
-    const fee = Math.abs(qty * px) * (p.feePct / 100);
+    const turnover = Math.abs(qty * px);
+    const c = p.currency === "INR" ? p.charges : null;
+    const brokerage = c ? turnover * (Number(c.brokeragePct || 0) / 100) : turnover * (p.feePct / 100);
+    const other = c ? turnover * ((Number(c.sttPct || 0) + Number(c.exchangePct || 0) + Number(c.sebiPct || 0) + Number(c.stampPct || 0)) / 100) + brokerage * (Number(c.gstPct || 0) / 100) : 0;
+    const fee = brokerage + other;
     let realized = 0;
     if (pos.qty !== 0 && Math.sign(pos.qty) !== Math.sign(signed)) {
       const closing =
@@ -1293,13 +1509,16 @@ export function initPanels(app) {
       note,
     });
     p.history = p.history.slice(0, 500);
+    const marked = p.cash + Object.entries(p.positions).reduce((sum, [s, x]) => sum + x.qty * (price(s) ?? x.avg), 0);
+    p.equityCurve.push({ time: rp ? rp.bars[rp.replay.index].time : Math.floor(Date.now() / 1000), value: marked });
+    p.equityCurve = p.equityCurve.slice(-500);
     app.persist();
     app.toast(
-      `Paper ${side} ${fmtNum(qty, 4)} ${ticker(sym)} at ${fmtPrice(px)}`,
+      `Paper ${side} ${fmtNum(qty, 4)} ${ticker(sym)} at ${priceText(sym, px)}`,
     );
   }
   function checkOrders(sym, px) {
-    const p = app.state.paper;
+    const p = accountForSymbol(sym, false);
     if (!p?.orders.length) return;
     let changed = false;
     for (const o of [...p.orders]) {
@@ -1331,7 +1550,7 @@ export function initPanels(app) {
     if (
       bottomTab === "paper" &&
       !bottomEl.classList.contains("collapsed") &&
-      app.state.paper?.positions[sym]
+      paper().positions[sym]
     )
       drawPaperNumbers();
   });
@@ -1350,7 +1569,7 @@ export function initPanels(app) {
     const eq = equity();
     const el = $("#ppEq");
     if (el) {
-      el.innerHTML = `<div class="stat"><div class="k">Equity</div><div class="v">${fmtPrice(eq)}</div></div><div class="stat"><div class="k">Cash</div><div class="v">${fmtPrice(p.cash)}</div></div><div class="stat"><div class="k">Total P&amp;L</div><div class="v ${eq >= p.initial ? "up" : "down"}">${fmtPrice(eq - p.initial)} (${fmtPct(((eq - p.initial) / p.initial) * 100)})</div></div>`;
+      el.innerHTML = `<div class="stat"><div class="k">Equity</div><div class="v">${cash(eq, p)}</div></div><div class="stat"><div class="k">Cash</div><div class="v">${cash(p.cash, p)}</div></div><div class="stat"><div class="k">Total P&amp;L</div><div class="v ${eq >= p.initial ? "up" : "down"}">${cash(eq - p.initial, p)} (${fmtPct(((eq - p.initial) / p.initial) * 100)})</div></div>`;
     }
     const pos = $("#ppPos");
     if (pos) {
@@ -1359,7 +1578,7 @@ export function initPanels(app) {
           .map(([s, x]) => {
             const px = price(s) ?? x.avg,
               pnl = x.qty * (px - x.avg);
-            return `<tr data-s="${esc(s)}"><td><b>${esc(ticker(s))}</b></td><td>${x.qty > 0 ? "Long" : "Short"}</td><td>${fmtNum(Math.abs(x.qty), 4)}</td><td>${fmtPrice(x.avg)}</td><td>${fmtPrice(px)}</td><td class="${pnl >= 0 ? "up" : "down"}">${fmtPrice(pnl)} (${fmtPct(((px - x.avg) / x.avg) * 100 * Math.sign(x.qty))})</td><td><button class="btn small" data-close="${esc(s)}">Close</button></td></tr>`;
+            return `<tr data-s="${esc(s)}"><td><b>${esc(ticker(s))}</b></td><td>${x.qty > 0 ? "Long" : "Short"}</td><td>${fmtNum(Math.abs(x.qty), 4)}</td><td>${priceText(s, x.avg)}</td><td>${priceText(s, px)}</td><td class="${pnl >= 0 ? "up" : "down"}">${cash(pnl, p)} (${fmtPct(((px - x.avg) / x.avg) * 100 * Math.sign(x.qty))})</td><td><button class="btn small" data-close="${esc(s)}">Close</button></td></tr>`;
           })
           .join("") ||
         '<tr><td colspan="7" class="l muted">No open positions.</td></tr>';
@@ -1369,25 +1588,27 @@ export function initPanels(app) {
     const p = paper();
     const sym = app.active?.cfg.symbol || "";
     const px = price(sym) ?? app.active?.bars.at(-1)?.close;
+    const unit = p.currency === "INR" ? "₹" : "$";
     bottom.innerHTML = `<div class="tester"><div class="left">
-      <h4 style="margin-top:0">Order ticket · ${esc(ticker(sym))} ${px ? `<span class="muted">${fmtPrice(px)}</span>` : ""}</h4>
-      <div class="row-flex"><label class="field">Type<select id="ppType"><option value="market">Market</option><option value="limit">Limit</option><option value="stop">Stop</option></select></label><label class="field">Price<input id="ppPrice" type="number" step="any" value="${px ? Number(px.toPrecision(6)) : ""}" style="width:110px"></label><label class="field">Amount ($)<input id="ppAmt" type="number" step="any" value="1000" style="width:100px"></label></div>
+      <h4 style="margin-top:0">Order ticket · ${esc(ticker(sym))} ${px ? `<span class="muted">${priceText(sym, px)}</span>` : ""}</h4>
+      <div class="row-flex"><label class="field">Type<select id="ppType"><option value="market">Market</option><option value="limit">Limit</option><option value="stop">Stop</option></select></label><label class="field">Price<input id="ppPrice" type="number" step="any" value="${px ? Number(px.toPrecision(6)) : ""}" style="width:110px"></label><label class="field">Amount (${unit})<input id="ppAmt" type="number" step="any" value="1000" style="width:100px"></label></div>
       <div class="row-flex" style="margin-top:6px"><label class="field">Stop loss % (optional)<input id="ppSl" type="number" step="any" style="width:90px"></label><label class="field">Take profit % (optional)<input id="ppTp" type="number" step="any" style="width:90px"></label></div>
       <div class="row-flex" style="margin-top:10px"><button class="btn primary" id="ppBuy" style="background:var(--up);border-color:var(--up)">Buy</button><button class="btn primary" id="ppSell" style="background:var(--down);border-color:var(--down)">Sell / short</button></div>
-      <h4>Account</h4><div class="row-flex"><label class="field">Starting balance<input id="ppInit" type="number" value="${p.initial}" style="width:110px"></label><label class="field">Fee % per trade<input id="ppFee" type="number" step="any" value="${p.feePct}" style="width:80px"></label><button class="btn danger" id="ppReset" style="align-self:end">Reset account</button></div>
+      <h4>Account</h4><div class="row-flex"><label class="field">Starting balance (${unit})<input id="ppInit" type="number" value="${p.initial}" style="width:110px"></label>${p.currency === "INR" ? `<label class="field">Brokerage %<input data-charge="brokeragePct" type="number" step="any" value="${p.charges.brokeragePct}" style="width:80px"></label><label class="field">STT %<input data-charge="sttPct" type="number" step="any" value="${p.charges.sttPct}" style="width:80px"></label><label class="field">Exchange %<input data-charge="exchangePct" type="number" step="any" value="${p.charges.exchangePct}" style="width:80px"></label><label class="field">GST %<input data-charge="gstPct" type="number" step="any" value="${p.charges.gstPct}" style="width:80px"></label><label class="field">SEBI %<input data-charge="sebiPct" type="number" step="any" value="${p.charges.sebiPct}" style="width:80px"></label><label class="field">Stamp duty %<input data-charge="stampPct" type="number" step="any" value="${p.charges.stampPct}" style="width:80px"></label>` : `<label class="field">Fee % per trade<input id="ppFee" type="number" step="any" value="${p.feePct}" style="width:80px"></label>`}<button class="btn danger" id="ppReset" style="align-self:end">Reset account</button></div><div class="equity" id="ppEquity" style="height:120px;margin-top:8px"></div>
       <p class="hint-text">${replayPane() ? `<b>Replay trading.</b> Orders fill at the replayed bars' prices in a separate practice account. Step or play the replay to fill limit and stop orders. Exit replay to go back to your live paper account.` : "Simulated fills at the live price. No real money, no exchange connection."}</p>
     </div><div class="right"><div class="stats" id="ppEq"></div>
       <h4>Positions</h4><table class="t"><thead><tr><th>Symbol</th><th>Side</th><th>Qty</th><th>Avg price</th><th>Last</th><th>P&amp;L</th><th></th></tr></thead><tbody id="ppPos"></tbody></table>
-      <h4>Working orders</h4><table class="t"><thead><tr><th>Symbol</th><th>Side</th><th>Type</th><th>Price</th><th>Qty</th><th></th></tr></thead><tbody>${p.orders.map((o) => `<tr><td><b>${esc(ticker(o.symbol))}</b></td><td>${o.side}</td><td>${o.type}${o.oco ? " (bracket)" : ""}</td><td>${fmtPrice(o.price)}</td><td>${fmtNum(o.qty, 4)}</td><td><button class="btn small" data-cancel="${o.id}">Cancel</button></td></tr>`).join("") || '<tr><td colspan="6" class="l muted">None.</td></tr>'}</tbody></table>
+      <h4>Working orders</h4><table class="t"><thead><tr><th>Symbol</th><th>Side</th><th>Type</th><th>Price</th><th>Qty</th><th></th></tr></thead><tbody>${p.orders.map((o) => `<tr><td><b>${esc(ticker(o.symbol))}</b></td><td>${o.side}</td><td>${o.type}${o.oco ? " (bracket)" : ""}</td><td>${priceText(o.symbol, o.price)}</td><td>${fmtNum(o.qty, 4)}</td><td><button class="btn small" data-cancel="${o.id}">Cancel</button></td></tr>`).join("") || '<tr><td colspan="6" class="l muted">None.</td></tr>'}</tbody></table>
       <h4>History</h4><table class="t"><thead><tr><th>Time</th><th>Symbol</th><th>Side</th><th>Qty</th><th>Price</th><th>Realised</th></tr></thead><tbody>${p.history
         .slice(0, 100)
         .map(
           (h) =>
-            `<tr><td>${new Date(h.time).toLocaleString()}</td><td>${esc(ticker(h.symbol))}</td><td>${h.side}</td><td>${fmtNum(h.qty, 4)}</td><td>${fmtPrice(h.price)}</td><td class="${h.realized >= 0 ? "up" : "down"}">${h.realized ? fmtPrice(h.realized) : ""}</td></tr>`,
+            `<tr><td>${new Date(h.time).toLocaleString()}</td><td>${esc(ticker(h.symbol))}</td><td>${h.side}</td><td>${fmtNum(h.qty, 4)}</td><td>${priceText(h.symbol, h.price)}</td><td class="${h.realized >= 0 ? "up" : "down"}">${h.realized ? cash(h.realized, p) : ""}</td></tr>`,
         )
         .join("")}</tbody></table>
     </div></div>`;
     drawPaperNumbers();
+    drawPaperEquity(p);
     const place = async (side) => {
       const type = $("#ppType").value,
         amt = Number($("#ppAmt").value);
@@ -1461,13 +1682,17 @@ export function initPanels(app) {
         )
       )
         return;
-      app.state[replayPane() ? "replayPaper" : "paper"] = {
+      const key = replayPane() ? "replayPaper" : isIndianSymbol(sym) ? "paperINR" : "paper";
+      app.state[key] = {
         initial: Number($("#ppInit").value) || 100000,
         cash: Number($("#ppInit").value) || 100000,
-        feePct: Number($("#ppFee").value) || 0,
+        feePct: Number($("#ppFee")?.value) || p.feePct || 0,
+        charges: p.charges,
+        currency: unit === "₹" ? "INR" : "USD",
         positions: {},
         orders: [],
         history: [],
+        equityCurve: [],
       };
       app.persist();
       renderPaper();
@@ -1476,6 +1701,10 @@ export function initPanels(app) {
       paper().feePct = Number(e.target.value) || 0;
       app.persist();
     };
+    bottom.querySelectorAll("[data-charge]").forEach((el) => el.addEventListener("change", () => {
+      paper().charges[el.dataset.charge] = Number(el.value) || 0;
+      app.persist();
+    }));
     bottom.onclick = (e) => {
       const close = e.target.closest("[data-close]")?.dataset.close;
       if (close) {
@@ -1487,6 +1716,7 @@ export function initPanels(app) {
           Math.abs(pos.qty),
           px2,
           "closed",
+          paper(),
         );
         paper().orders = paper().orders.filter((o) => o.symbol !== close);
         app.persist();
@@ -1499,6 +1729,19 @@ export function initPanels(app) {
         renderPaper();
       }
     };
+  }
+
+  function drawPaperEquity(account) {
+    const el = $("#ppEquity");
+    if (!el) return;
+    const values = [account.initial, ...(account.equityCurve || []).map((x) => x.value)];
+    if (values.length < 2) {
+      el.innerHTML = '<div class="hint-text">Equity curve will appear after your first paper trade.</div>';
+      return;
+    }
+    const min = Math.min(...values), max = Math.max(...values), span = max - min || 1;
+    const points = values.map((v, i) => `${(i / (values.length - 1)) * 100},${96 - ((v - min) / span) * 88}`).join(" ");
+    el.innerHTML = `<svg viewBox="0 0 100 100" preserveAspectRatio="none" style="width:100%;height:100%" aria-label="Paper trading equity curve"><polyline points="${points}" fill="none" stroke="${values.at(-1) >= account.initial ? "#26a69a" : "#ef5350"}" stroke-width="1.5" vector-effect="non-scaling-stroke" /></svg>`;
   }
 
   // ======================= INDICATOR EDITOR =======================
@@ -1539,7 +1782,7 @@ export function initPanels(app) {
     }
     bottom.innerHTML = `<div class="tester"><div class="left"><div class="row-flex"><button class="btn primary" id="edNew">New indicator</button></div>
       <h4>Your indicators</h4><div id="edList">${edListHtml(list)}</div>
-      <p class="hint-text">Each indicator is a small JavaScript file in the app's <code>custom</code> folder, in the format in <code>docs/custom-indicators.md</code> (start from <code>docs/indicator-template.js</code>). Each one is checked before it's saved. You can also ask your AI agent: "add an indicator to Quant Terminal that…" and it will write the file for you.</p></div>
+      <p class="hint-text">Each indicator is a small JavaScript file in the app's <code>custom</code> folder, in the format in <code>docs/custom-indicators.md</code> (start from <code>docs/indicator-template.js</code>). Indicators use the active chart bars, including NSE and BSE stocks. Each one is checked before it's saved.</p></div>
       <div class="right"><div class="row-flex"><input class="in" id="edName" placeholder="Indicator name" style="flex:1"><button class="btn" id="edSave">Save</button><button class="btn primary" id="edSaveAdd">Save and add to chart</button></div><textarea class="in" id="edCode" spellcheck="false" style="flex:1;min-height:220px"></textarea><div id="edErr" class="down" style="white-space:pre-line"></div></div></div>`;
     const code = $("#edCode");
     code.value = TEMPLATE;

@@ -11,7 +11,7 @@ function rma(values, length) {
 }
 
 export default {
-  name: "ADX (Custom)", group: "Momentum", overlay: false,
+  name: "ADX / DMI (Custom)", group: "Trend", overlay: false,
   inputs: [{ key: "length", label: "Length", type: "int", default: 14, min: 1 }],
   outputs: [
     { key: "adx", label: "ADX", color: "#39ff14", lineWidth: 2 },

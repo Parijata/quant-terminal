@@ -59,15 +59,19 @@
         <option value="1">1 chart</option>
         <option value="2v">2 side by side</option>
         <option value="2h">2 stacked</option>
-        <option value="3">3 charts</option>
         <option value="4">4 charts</option>
         <option value="6">6 charts</option>
-        <option value="8">8 charts</option>
-        <option value="16">16 charts</option>
       </select>
       <label class="tb check" title="Change the symbol on every chart at once"
-        ><input type="checkbox" id="syncSymbol" /> Sync</label
+        ><input type="checkbox" id="syncSymbol" /> Sync symbol</label
       >
+      <label class="tb check" title="Change the timeframe on every chart at once"
+        ><input type="checkbox" id="syncTf" /> Sync timeframe</label
+      >
+      <label class="tb check" title="Show the same crosshair across charts"
+        ><input type="checkbox" id="crosshairSync" /> Sync crosshair</label
+      >
+      <button id="templateBtn" class="tb" title="Save or load chart templates">Templates</button>
       <button id="replayBtn" class="tb" title="Bar replay">
         <svg viewBox="0 0 24 24"><path d="M4 12a8 8 0 1 0 3-6.2M4 4v4h4" /></svg
         ><span>Replay</span>
@@ -78,9 +82,11 @@
         ><span>Alert</span>
       </button>
       <div class="spacer"></div>
-      <button id="logBtn" class="tb" title="Logarithmic price scale">
-        Log
-      </button>
+      <select id="scaleSel" class="tb" title="Price scale">
+        <option value="normal">Normal scale</option>
+        <option value="log">Log scale</option>
+        <option value="percentage">Percentage scale</option>
+      </select>
       <button id="snapBtn" class="tb icon" title="Download chart image">
         <svg viewBox="0 0 24 24">
           <rect x="3" y="6" width="18" height="14" rx="2" />
@@ -112,7 +118,10 @@
             <button data-tab="screener">Screener</button>
             <button data-tab="heatmap">Heatmap</button>
             <button data-tab="seasonals">Seasonals</button>
+            <button data-tab="correlation">Correlation</button>
             <button data-tab="financials">Financials</button>
+            <button data-tab="optionchain">Option chain</button>
+            <button data-tab="indiaflows">FII/DII &amp; deals</button>
             <button data-tab="paper">Paper trading</button>
             <button data-tab="editor">Indicator editor</button>
             <div class="spacer"></div>

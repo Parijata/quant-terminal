@@ -63,6 +63,8 @@ All free and public, with automatic fallbacks:
 
 `npm run doctor` tells you which sources work from your connection.
 
+Indian option chains and FII/DII plus bulk/block deal reports are in the **Option chain** and **FII/DII & deals** panels. See [Indian market data setup](docs/india-market-data.md) for public-source limits, broker setup, and local credential storage.
+
 ## Your own data feed (optional)
 
 The public sources need no account. If you have a market data key, add it and charts use it first. When your key can't load a chart, the public sources carry it and the chart says why. Every chart's legend names the source it's on.

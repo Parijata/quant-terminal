@@ -93,6 +93,10 @@ export class VolumeProfile {
     if (!prof) return;
     const W = (size.width * Math.max(5, Math.min(80, this.p.width))) / 100;
     const x0 = size.width - W;
+    const rgba = (color, alpha) => {
+      const m = /^#?([\da-f]{2})([\da-f]{2})([\da-f]{2})$/i.exec(color || "#39ff14");
+      return m ? `rgba(${parseInt(m[1],16)},${parseInt(m[2],16)},${parseInt(m[3],16)},${alpha})` : `rgba(57,255,20,${alpha})`;
+    };
     for (let k = 0; k < prof.total.length; k++) {
       const yTop = this.series.priceToCoordinate(prof.lo + (k + 1) * prof.step);
       const yBot = this.series.priceToCoordinate(prof.lo + k * prof.step);
@@ -101,16 +105,16 @@ export class VolumeProfile {
       const inVa = k >= prof.vaLow && k <= prof.vaHigh;
       const uw = (prof.up[k] / prof.max) * W,
         dw = (prof.down[k] / prof.max) * W;
-      ctx.fillStyle = inVa ? "rgba(57,255,20,0.48)" : "rgba(57,255,20,0.22)";
+      ctx.fillStyle = rgba(this.p.color, inVa ? 0.48 : 0.22);
       ctx.fillRect(x0 + W - uw - dw, yTop, uw, h);
-      ctx.fillStyle = inVa ? "rgba(140,255,95,0.46)" : "rgba(140,255,95,0.2)";
+      ctx.fillStyle = rgba(this.p.color, inVa ? 0.3 : 0.12);
       ctx.fillRect(x0 + W - dw, yTop, dw, h);
     }
     const yPoc = this.series.priceToCoordinate(
       prof.lo + (prof.poc + 0.5) * prof.step,
     );
     if (yPoc != null) {
-      ctx.strokeStyle = "#b5ff00";
+      ctx.strokeStyle = this.p.color || "#b5ff00";
       ctx.lineWidth = 1;
       ctx.setLineDash([4, 3]);
       ctx.beginPath();
@@ -118,7 +122,7 @@ export class VolumeProfile {
       ctx.lineTo(size.width, yPoc);
       ctx.stroke();
       ctx.setLineDash([]);
-      ctx.fillStyle = "#b5ff00";
+      ctx.fillStyle = this.p.color || "#b5ff00";
       ctx.font = "10px -apple-system, Segoe UI, Roboto, sans-serif";
       ctx.textAlign = "right";
       ctx.fillText("POC", size.width - 4, yPoc - 4);
