@@ -266,7 +266,7 @@ async function handle(req, res) {
     if (p === "/api/probe") return send(res, 200, await data.probeAll());
     if (p === "/api/resolve")
       return send(res, 200, await data.resolve(q.symbol));
-    if (p === "/api/search") return send(res, 200, await data.search(q.q));
+    if (p === "/api/search") return send(res, 200, await data.search(q.q, q.type));
     if (p === "/api/spread") return send(res, 200, await data.getSpread(q.symbol));
     if (p === "/api/candles")
       return send(

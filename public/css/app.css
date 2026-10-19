@@ -617,6 +617,7 @@ table.t tbody tr:hover {
 .wl-head select {
   flex: 1;
 }
+.wl-add-symbol { min-width: 32px; font-size: 20px; line-height: 1; padding: 2px 6px; }
 .wl-search { position: relative; padding: 8px; }
 .wl-search > input { width: 100%; }
 .wl-suggestions { position: absolute; z-index: 20; top: calc(100% - 4px); left: 8px; right: 8px; max-height: 300px; overflow-y: auto; border: 1px solid var(--border); border-radius: 6px; background: var(--panel); box-shadow: var(--shadow); }
@@ -912,6 +913,42 @@ h4 {
   text-transform: uppercase;
   letter-spacing: 0.05em;
   padding: 10px 10px 4px;
+}
+.add-symbol-query { margin-bottom: 10px; }
+.symbol-categories { display: flex; gap: 6px; overflow-x: auto; padding: 2px 0 10px; scrollbar-width: thin; }
+.symbol-category { flex: 0 0 auto; border: 0; border-radius: 18px; padding: 6px 12px; background: var(--hover); color: var(--text); cursor: pointer; font-size: 12px; }
+.symbol-category:hover { background: var(--accent-soft); }
+.symbol-category.active { color: var(--panel); background: var(--text); }
+.symbol-results { max-height: min(54vh, 520px); overflow-y: auto; border-top: 1px solid var(--border); }
+.add-symbol-result { min-height: 40px; display: grid; grid-template-columns: 26px minmax(95px, 130px) minmax(100px, 1fr) auto 34px; gap: 9px; align-items: center; padding: 5px 8px; border-bottom: 1px solid var(--border); }
+.add-symbol-result:hover, .add-symbol-result.selected { background: var(--hover); }
+.symbol-logo { width: 22px; height: 22px; display: inline-grid; place-items: center; border-radius: 50%; color: white; font-size: 9px; font-weight: 750; letter-spacing: -.3px; background: #687386; }
+.logo-nse, .logo-nasdaq { background: linear-gradient(145deg, #4a54c7, #1889da); }
+.logo-bse { background: linear-gradient(145deg, #147fe2, #00a7d8); }
+.logo-binance { background: #f0b90b; color: #171717; font-size: 14px; }
+.logo-coinbase { background: #1652f0; }
+.logo-kraken { background: #6a40c9; }
+.logo-cme { background: #244c7d; }
+.logo-fx, .logo-forex { background: #16866e; }
+.logo-yahoo { background: #6f2dbd; }
+.logo-fund { background: #27834a; }
+.logo-futures { background: #244c7d; }
+.logo-index { background: #264b7d; }
+.logo-bond { background: #5f6b73; }
+.logo-economy { background: #af6726; }
+.logo-option { background: #933c77; }
+.add-symbol-ticker { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; font-weight: 650; }
+.add-symbol-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }
+.add-symbol-meta { color: var(--muted); white-space: nowrap; font-size: 11px; }
+.add-symbol-action { border: 0; background: transparent; color: var(--text); cursor: pointer; font-size: 22px; line-height: 1; }
+.add-symbol-action:hover { color: var(--accent); }
+.add-symbol-action.added { color: var(--accent); font-size: 18px; cursor: default; }
+.add-symbol-action:disabled { opacity: .8; }
+.symbol-search-empty { padding: 20px 10px; color: var(--muted); text-align: center; font-size: 13px; }
+.symbol-search-hint { padding-top: 8px; }
+@media (max-width: 560px) {
+  .add-symbol-result { grid-template-columns: 24px minmax(70px, 100px) minmax(80px, 1fr) 28px; gap: 6px; }
+  .add-symbol-meta { display: none; }
 }
 .form-grid {
   display: grid;

@@ -273,8 +273,7 @@ export function initPanels(app) {
   }
   function renderWatchlist() {
     const names = Object.keys(app.state.watchlists);
-    side.innerHTML = `<div class="wl-head"><select class="in" id="wlSel">${names.map((n) => `<option ${n === app.state.activeWatchlist ? "selected" : ""}>${esc(n)}</option>`).join("")}</select><button class="btn small" id="wlNew" title="New list">+ List</button><button class="btn small" id="wlDel" title="Delete this list">Delete</button></div>
-      <div class="wl-search"><input class="in" id="wlAdd" placeholder="Search or add a symbol" autocomplete="off" role="combobox" aria-expanded="false" aria-controls="wlSuggestions"><div id="wlSuggestions" class="wl-suggestions hidden" role="listbox"></div></div><div id="wlRows"></div>`;
+    side.innerHTML = `<div class="wl-head"><select class="in" id="wlSel">${names.map((n) => `<option ${n === app.state.activeWatchlist ? "selected" : ""}>${esc(n)}</option>`).join("")}</select><button class="btn small wl-add-symbol" id="wlAdd" title="Add symbol" aria-label="Add symbol">＋</button><button class="btn small" id="wlNew" title="New list">+ List</button><button class="btn small" id="wlDel" title="Delete this list">Delete</button></div><div id="wlRows"></div>`;
     $("#wlSel").onchange = (e) => {
       app.state.activeWatchlist = e.target.value;
       app.persist();
@@ -297,13 +296,6 @@ export function initPanels(app) {
       app.persist();
       renderWatchlist();
     };
-    const input = $("#wlAdd"), suggestions = $("#wlSuggestions");
-    let matches = [], activeMatch = -1, timer, searchSeq = 0;
-    const hideSuggestions = () => {
-      suggestions.classList.add("hidden");
-      input.setAttribute("aria-expanded", "false");
-      activeMatch = -1;
-    };
     const addSymbol = async (raw) => {
       if (!raw?.trim()) return;
       try {
@@ -311,64 +303,19 @@ export function initPanels(app) {
         if (!r?.id) throw new Error("That symbol could not be resolved. Choose a search result or check the ticker.");
         const list = wlSymbols();
         const alreadyAdded = list.includes(r.id);
-        if (!alreadyAdded) list.push(r.id);
-        input.value = "";
-        hideSuggestions();
+        if (alreadyAdded) { app.toast(`${ticker(r.id)} is already on this list.`); return false; }
+        list.push(r.id);
         app.persist();
         drawRows();
         refreshQuotes();
-        app.toast(alreadyAdded ? `${ticker(r.id)} is already on this list.` : `${ticker(r.id)} added to ${app.state.activeWatchlist}.`);
+        app.toast(`${ticker(r.id)} added to ${app.state.activeWatchlist}.`);
+        return true;
       } catch (err) {
         app.toast(err.message, "err");
+        return false;
       }
     };
-    input.oninput = () => {
-      clearTimeout(timer);
-      const seq = ++searchSeq;
-      matches = [];
-      activeMatch = -1;
-      const q = input.value.trim();
-      if (!q) return hideSuggestions();
-      timer = setTimeout(async () => {
-        try {
-          const found = await api.search(q);
-          // An earlier, slower response must never replace results for newer text.
-          if (seq !== searchSeq || input.value.trim() !== q) return;
-          matches = found.slice(0, 50);
-          suggestions.innerHTML = matches.map((r, i) => `<button type="button" class="wl-suggestion ${i === activeMatch ? "active" : ""}" role="option" aria-selected="${i === activeMatch}" data-index="${i}" data-symbol="${esc(r.symbol)}"><b>${esc(ticker(r.symbol))}</b><span>${esc(r.name || r.exchange || "Market")}</span><small>${esc(r.exchange || "")}</small></button>`).join("") || `<div class="wl-no-suggestions">No matches. Press Enter to try “${esc(q)}”.</div>`;
-          suggestions.classList.remove("hidden");
-          input.setAttribute("aria-expanded", "true");
-        } catch {
-          if (seq !== searchSeq) return;
-          matches = [];
-          suggestions.innerHTML = `<div class="wl-no-suggestions">Search is unavailable. Press Enter to try “${esc(q)}” anyway.</div>`;
-          suggestions.classList.remove("hidden");
-          input.setAttribute("aria-expanded", "true");
-        }
-      }, 180);
-    };
-    input.onkeydown = async (e) => {
-      if (e.key === "Escape") return hideSuggestions();
-      if (e.key === "ArrowDown" && matches.length) {
-        e.preventDefault(); activeMatch = (activeMatch + 1) % matches.length;
-        suggestions.querySelectorAll("[data-index]").forEach((node, i) => { node.classList.toggle("active", i === activeMatch); node.setAttribute("aria-selected", String(i === activeMatch)); });
-        return;
-      }
-      if (e.key === "ArrowUp" && matches.length) {
-        e.preventDefault(); activeMatch = (activeMatch - 1 + matches.length) % matches.length;
-        suggestions.querySelectorAll("[data-index]").forEach((node, i) => { node.classList.toggle("active", i === activeMatch); node.setAttribute("aria-selected", String(i === activeMatch)); });
-        return;
-      }
-      if (e.key === "Enter") {
-        e.preventDefault();
-        const choice = activeMatch >= 0 ? matches[activeMatch]?.symbol : input.value;
-        await addSymbol(choice || input.value);
-      }
-    };
-    suggestions.onclick = (e) => {
-      const option = e.target.closest("[data-symbol]");
-      if (option) addSymbol(option.dataset.symbol);
-    };
+    $("#wlAdd").onclick = () => app.openAddSymbolSearch(addSymbol, () => wlSymbols());
     $("#wlRows").onclick = (e) => {
       const row = e.target.closest(".wl-row");
       if (!row) return;

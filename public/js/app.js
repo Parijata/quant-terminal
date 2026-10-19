@@ -11,6 +11,26 @@ import { parseTf, toCsv } from "../lib/series.js";
 import { initPanels } from "./panels.js";
 
 const $ = (s, el = document) => el.querySelector(s);
+const normalizeSymbolType = (raw) => {
+  const t = String(raw || "").toLowerCase().replace(/[^a-z]/g, "");
+  if (/crypto|cryptocurrency/.test(t)) return "crypto";
+  if (/future|futures/.test(t)) return "futures";
+  if (/forex|currency/.test(t)) return "forex";
+  if (/option/.test(t)) return "option";
+  if (/bond|fixedincome/.test(t)) return "bond";
+  if (/econom/.test(t)) return "economy";
+  if (/index|indices/.test(t)) return "index";
+  if (/etf|fund|mutualfund/.test(t)) return "fund";
+  return "stock";
+};
+const formatSymbolType = (raw) => ({ stock:"Stock", fund:"Fund / ETF", futures:"Future", forex:"Forex", crypto:"Crypto", index:"Index", bond:"Bond", economy:"Economy", option:"Option" })[normalizeSymbolType(raw)] || String(raw || "Market");
+const symbolLogo = (r) => {
+  const ex = String(r.exchange || r.symbol.split(":")[0] || "").toUpperCase();
+  const type = normalizeSymbolType(r.type);
+  const label = ({ NSE:"N", BSE:"B", BINANCE:"₿", COINBASE:"C", KRAKEN:"K", CME:"C", NASDAQ:"N", NYSE:"N", FX:"FX", YAHOO:"Y" })[ex] || (type === "crypto" ? "₿" : type === "forex" ? "$" : type === "index" ? "IDX" : type === "bond" ? "B" : type === "option" ? "O" : "•");
+  const color = ({ NSE:"nse", BSE:"bse", BINANCE:"binance", COINBASE:"coinbase", KRAKEN:"kraken", CME:"cme", NASDAQ:"nasdaq", NYSE:"nyse", FX:"fx", YAHOO:"yahoo" })[ex] || type;
+  return `<span class="symbol-logo logo-${color}" aria-hidden="true">${label}</span>`;
+};
 const TF_QUICK = ["1m", "5m", "15m", "1h", "4h", "1D", "1W"];
 const LAYOUTS = { 1: 1, "2v": 2, "2h": 2, 3: 3, 4: 4, 6: 6, 8: 8, 16: 16 };
 const DEFAULT_WATCHLISTS = {
@@ -466,6 +486,59 @@ class App {
     q.focus();
     q.setSelectionRange(q.value.length, q.value.length);
     if (initial) run();
+  }
+
+  openAddSymbolSearch(onAdd, isAdded = () => false) {
+    const categories = ["All", "Stocks", "Funds", "Futures", "Forex", "Crypto", "Indices", "Bonds", "Economy", "Options"];
+    const categoryKey = (label) => label === "All" ? "all" : ({ Stocks:"stock", Funds:"fund", Futures:"futures", Forex:"forex", Crypto:"crypto", Indices:"index", Bonds:"bond", Economy:"economy", Options:"option" })[label];
+    const card = this.modal("Add symbol", `<input class="search-in add-symbol-query" id="addSymQ" placeholder="Search symbol, name, or identifier…" autocomplete="off"><div class="symbol-categories">${categories.map((c, i) => `<button class="symbol-category ${i === 0 ? "active" : ""}" type="button" data-category="${categoryKey(c)}">${c}</button>`).join("")}</div><div class="symbol-results" id="addSymResults"><div class="symbol-search-empty">Search for a symbol to see matching markets.</div></div><div class="hint-text symbol-search-hint">Choose a result and press ＋ to add it to the selected watchlist.</div>`, { wide: true });
+    const q = card.querySelector("#addSymQ"), resultsBox = card.querySelector("#addSymResults");
+    let category = "all", results = [], selected = 0, timer, seq = 0;
+    const visible = () => results.filter((r) => category === "all" || normalizeSymbolType(r.type) === category);
+    const draw = () => {
+      const rows = visible();
+      resultsBox.innerHTML = rows.map((r, i) => {
+        const added = isAdded(r.symbol);
+        return `<div class="add-symbol-result ${i === selected ? "selected" : ""}" data-result="${i}" role="option" aria-selected="${i === selected}">${symbolLogo(r)}<span class="add-symbol-ticker">${esc(ticker(r.symbol))}</span><span class="add-symbol-name">${esc(r.name || "")}</span><span class="add-symbol-meta">${esc(formatSymbolType(r.type))} · ${esc(r.exchange || "")}</span><button type="button" class="add-symbol-action ${added ? "added" : ""}" data-add="${i}" ${added ? "disabled" : ""} title="${added ? "Already on watchlist" : "Add symbol"}">${added ? "✓" : "＋"}</button></div>`;
+      }).join("") || `<div class="symbol-search-empty">${q.value.trim() ? "No matches for this category. Try another category or search term." : "Search for a symbol to see matching markets."}</div>`;
+    };
+    const run = async () => {
+      const term = q.value.trim();
+      const request = ++seq;
+      if (!term) { results = []; selected = 0; draw(); return; }
+      resultsBox.innerHTML = `<div class="symbol-search-empty">Searching…</div>`;
+      try { results = await api.search(term, category); } catch { results = []; }
+      if (request !== seq || q.value.trim() !== term) return;
+      selected = 0;
+      draw();
+    };
+    q.oninput = () => { clearTimeout(timer); timer = setTimeout(run, 180); };
+    card.querySelector(".symbol-categories").onclick = (e) => {
+      const button = e.target.closest("[data-category]");
+      if (!button) return;
+      category = button.dataset.category;
+      selected = 0;
+      card.querySelectorAll(".symbol-category").forEach((b) => b.classList.toggle("active", b === button));
+      if (category === "economy" && !q.value.trim()) q.value = "economy";
+      if (q.value.trim()) run(); else draw();
+    };
+    resultsBox.onclick = async (e) => {
+      const button = e.target.closest("[data-add]");
+      if (!button) return;
+      const row = visible()[Number(button.dataset.add)];
+      if (!row) return;
+      button.disabled = true;
+      button.textContent = "…";
+      await onAdd(row.symbol);
+      draw();
+    };
+    q.onkeydown = async (e) => {
+      const rows = visible();
+      if (e.key === "ArrowDown" && rows.length) { selected = Math.min(selected + 1, rows.length - 1); draw(); e.preventDefault(); }
+      if (e.key === "ArrowUp" && rows.length) { selected = Math.max(selected - 1, 0); draw(); e.preventDefault(); }
+      if (e.key === "Enter" && rows[selected]) { await onAdd(rows[selected].symbol); draw(); e.preventDefault(); }
+    };
+    q.focus();
   }
 
   openIndicatorPicker() {

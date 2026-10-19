@@ -32,7 +32,7 @@ export const api = {
     ),
   quotes: (symbols) =>
     req("GET", `/api/quotes?symbols=${encodeURIComponent(symbols.join(","))}`),
-  search: (q) => req("GET", `/api/search?q=${encodeURIComponent(q)}`),
+  search: (q, type = "all") => req("GET", `/api/search?q=${encodeURIComponent(q)}&type=${encodeURIComponent(type)}`),
 };
 
 export function download(name, content, type = "text/csv") {
