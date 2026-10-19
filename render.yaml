@@ -1,0 +1,19 @@
+services:
+  - type: web
+    name: quant-terminal
+    runtime: node
+    plan: free
+    buildCommand: npm install --omit=dev
+    startCommand: node server.js
+    healthCheckPath: /healthz
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: HOST
+        value: 0.0.0.0
+      - key: QT_PUBLIC_DEPLOY
+        value: "1"
+      - key: QT_AUTH_USER
+        sync: false
+      - key: QT_AUTH_PASSWORD
+        sync: false
