@@ -9,6 +9,7 @@ import {
   fmtNum,
   ticker,
   exchange,
+  displayExchange,
 } from "./api.js";
 import { INDICATORS, BY_ID, registerIndicator } from "../lib/indicators.js";
 import { renderNews, renderSeasonals, renderFinancials, renderCorrelation } from "./research.js";
@@ -310,7 +311,7 @@ export function initPanels(app) {
       if (!matches.length) {
         suggestions.innerHTML = addInput.value.trim() ? '<div class="wl-no-suggestions">No matches. Press Enter to try this symbol.</div>' : "";
       } else {
-        suggestions.innerHTML = matches.map((r, i) => `<button type="button" class="wl-suggestion ${i === activeMatch ? "active" : ""}" role="option" data-index="${i}"><b>${esc(ticker(r.symbol))}</b><span>${esc(r.name || "")} · ${esc(r.exchange || "")}</span><small>＋ Add</small></button>`).join("");
+        suggestions.innerHTML = matches.map((r, i) => `<button type="button" class="wl-suggestion ${i === activeMatch ? "active" : ""}" role="option" data-index="${i}"><b>${esc(ticker(r.symbol))}</b><span>${esc(r.name || "")} · ${esc(displayExchange(r.symbol, r.exchange))}</span><small>＋ Add</small></button>`).join("");
       }
       suggestions.classList.toggle("hidden", !addInput.value.trim());
       addInput.setAttribute("aria-expanded", String(Boolean(addInput.value.trim())));
@@ -388,7 +389,7 @@ export function initPanels(app) {
         .map((s) => {
           const q = quotes[s] || {};
           const live = app.prices[s] ?? q.price;
-          return `<div class="wl-row ${s === cur ? "current" : ""}" data-sym="${esc(s)}"><span class="sym">${esc(ticker(s))} <span class="ex">${esc(exchange(s))}</span></span><span class="px">${formatSymbolPrice(s, live)}</span><span class="chg ${q.changePct >= 0 ? "up" : "down"}">${fmtPct(q.changePct)}</span><button class="x" title="Remove"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg></button></div>`;
+          return `<div class="wl-row ${s === cur ? "current" : ""}" data-sym="${esc(s)}"><span class="sym">${esc(ticker(s))} <span class="ex">${esc(displayExchange(s))}</span></span><span class="px">${formatSymbolPrice(s, live)}</span><span class="chg ${q.changePct >= 0 ? "up" : "down"}">${fmtPct(q.changePct)}</span><button class="x" title="Remove"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg></button></div>`;
         })
         .join("") ||
       '<div class="pad hint-text">Empty list. Add a symbol above.</div>';
@@ -457,6 +458,7 @@ export function initPanels(app) {
           active: !a.active,
           lastBar: null,
         });
+      for (const pane of app.panes || []) if (pane.cfg.symbol === a.symbol) { pane._alertLineKey = ""; pane.refreshAlertLines?.(); }
       renderAlerts();
     };
   }
@@ -521,8 +523,9 @@ export function initPanels(app) {
       if (!rs.length) return app.toast("Add a condition.", "err");
       const c = compileRules({ rules: rs });
       try {
+        const symbol = card.querySelector("#aSym").value.trim();
         await api.post("/api/alerts", {
-          symbol: card.querySelector("#aSym").value.trim(),
+          symbol,
           tf: card.querySelector("#aTf").value.trim(),
           left: c.rules[0].left,
           op: c.rules[0].op,
@@ -535,6 +538,7 @@ export function initPanels(app) {
           webhook: card.querySelector("#aHook").value.trim(),
         });
         app.closeModal();
+        for (const pane of app.panes || []) if (pane.cfg.symbol === symbol) { pane._alertLineKey = ""; pane.refreshAlertLines?.(); }
         app.toast("Alert created.");
         if ("Notification" in window && Notification.permission === "default")
           Notification.requestPermission();
@@ -1093,17 +1097,17 @@ export function initPanels(app) {
       .slice(0, sc.visible)
       .map(
         (r) =>
-          `<tr data-s="${esc(r.symbol)}"><td><b>${esc(r.ticker)}</b></td><td class="l muted">${esc((r.name || "").slice(0, 40))}</td><td>${formatSymbolPrice(r.symbol, r.price)}</td><td class="${r.changePct >= 0 ? "up" : "down"}">${fmtPct(r.changePct)}</td><td>${fmtNum(r.volume, 0)}</td>${sc.universe !== "crypto" ? `<td>${/^india|nifty|sensex/.test(sc.universe) ? "₹" : ""}${fmtNum(r.marketCap, 0)}</td><td class="l muted">${esc(r.sector || r.exchange || "")}</td>` : ""}${withMetrics ? (()=>{const m=sc.scan[r.symbol]?.metrics||{};return `<td>${Number.isFinite(m.rsi)?m.rsi.toFixed(1):"—"}</td><td>${m.aboveEMA50?"Above":"Below"}</td><td>${Number.isFinite(m.volumeSpike)?`${m.volumeSpike.toFixed(1)}×`:"—"}</td><td>${Number.isFinite(m.high52DistancePct)?`${m.high52DistancePct.toFixed(1)}%`:"—"}</td><td>${esc(m.supertrendFlip||"—")}</td><td>${esc(m.macdCross||"—")}</td>`;})():""}</tr>`,
+          `<tr data-s="${esc(r.symbol)}"><td><b>${esc(r.ticker)}</b></td><td class="l muted">${esc((r.name || "").slice(0, 40))}</td><td>${formatSymbolPrice(r.symbol, r.price)}</td><td class="${r.changePct >= 0 ? "up" : "down"}">${fmtPct(r.changePct)}</td><td>${fmtNum(r.volume, 0)}</td>${sc.universe !== "crypto" ? `<td>${/^india|nifty|sensex/.test(sc.universe) ? "₹" : ""}${fmtNum(r.marketCap, 0)}</td><td class="l muted">${esc(r.sector || displayExchange(r.symbol, r.exchange))}</td>` : ""}${withMetrics ? (()=>{const m=sc.scan[r.symbol]?.metrics||{};return `<td>${Number.isFinite(m.rsi)?m.rsi.toFixed(1):"—"}</td><td>${m.aboveEMA50?"Above":"Below"}</td><td>${Number.isFinite(m.volumeSpike)?`${m.volumeSpike.toFixed(1)}×`:"—"}</td><td>${Number.isFinite(m.high52DistancePct)?`${m.high52DistancePct.toFixed(1)}%`:"—"}</td><td>${esc(m.supertrendFlip||"—")}</td><td>${esc(m.macdCross||"—")}</td>`;})():""}</tr>`,
       )
       .join(
         "",
-      )}</tbody></table><div class="pad hint-text">${rows.length} match${rows.length === 1 ? "" : "es"}${rows.length > 500 ? " (showing 500)" : ""}. Click a row to open its chart.${sc.universe === "us" || sc.universe === "etf" ? " Live prices for the 200 largest companies; the rest show the last close." : sc.universe === "india" && rows.some((r) => !r.live) ? " Some prices are last close or unavailable when Yahoo Finance has no quote." : ""}</div>`;
+      )}</tbody></table><div class="pad hint-text">${rows.length} match${rows.length === 1 ? "" : "es"}${rows.length > 500 ? " (showing 500)" : ""}. Click a row to open its chart.${sc.universe === "us" || sc.universe === "etf" ? " Live prices for the 200 largest companies; the rest show the last close." : sc.universe === "india" && rows.some((r) => !r.live) ? " Some prices are last close or temporarily unavailable." : ""}</div>`;
     const note = box.querySelector(".pad.hint-text");
     if (note) {
       const availability = sc.universe === "us" || sc.universe === "etf"
         ? " Live prices cover the 200 largest companies; other rows use last-close data."
         : sc.universe === "india" && rows.some((r) => !r.live)
-          ? " Some prices may be delayed or unavailable from Yahoo Finance."
+          ? " Some prices may be delayed or temporarily unavailable."
           : "";
       note.textContent = `${rows.length} matches. Showing ${Math.min(rows.length, sc.visible)} of ${rows.length}.${availability} `;
     }

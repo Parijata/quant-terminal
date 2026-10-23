@@ -306,6 +306,7 @@ async function handle(req, res) {
     if (p === "/api/earnings") return send(res, 200, await info.earnings(Number(q.days) || 5));
     if (p === "/api/india-earnings") return send(res, 200, await info.indianEarnings());
     if (p === "/api/dividends") return send(res, 200, await info.dividends(Number(q.days) || 5));
+    if (p === "/api/chart-events") return send(res, 200, await info.chartEvents(q.symbol || ""));
     if (p === "/api/news") return send(res, 200, await info.news(q.symbol));
     if (p === "/api/financials") return send(res, 200, await info.financials(q.symbol, q.frequency));
     if (p === "/api/screener") {

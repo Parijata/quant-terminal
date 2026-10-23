@@ -6,7 +6,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const root = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
-const tests = ['indicators', 'series', 'backtest', 'server', 'reference', 'providers', 'feeds', 'imports', 'quant'].map((t) => path.join(root, 'test', `${t}.test.js`));
+const tests = ['indicators', 'series', 'backtest', 'server', 'reference', 'providers', 'feeds', 'imports', 'quant', 'chart-navigation'].map((t) => path.join(root, 'test', `${t}.test.js`));
 // Node 20.14+ and 22+: a stuck test fails after 2 minutes, and a test file exits once its tests finish.
 const [major, minor] = process.versions.node.split('.').map(Number);
 const guard = major >= 22 || (major === 20 && minor >= 14) ? ['--test-timeout=120000', '--test-force-exit'] : [];

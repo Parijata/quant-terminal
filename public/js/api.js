@@ -15,7 +15,7 @@ async function req(method, url, body) {
   } catch {
     data = text;
   }
-  if (!res.ok) throw new Error(data?.error || data || `HTTP ${res.status}`);
+  if (!res.ok) throw new Error(String(data?.error || data || `HTTP ${res.status}`).replace(/yahoo(?: finance)?/ig, "public market data"));
   return data;
 }
 
@@ -96,3 +96,15 @@ export const ticker = (id) => {
   return s.split(":").pop();
 };
 export const exchange = (id) => String(id || "").split(":")[0];
+// User-facing venue label. Keep exchange() unchanged for data-provider routing.
+export const displayExchange = (id, hinted = "") => {
+  const raw = String(hinted || "").toUpperCase();
+  const symbol = ticker(id).toUpperCase();
+  const providerAlias = !raw || raw === "YAHOO" || raw === "YAHOO FINANCE";
+  if (providerAlias) {
+    if (symbol.endsWith(".NS") || symbol === "^NSEI") return "NSE";
+    if (symbol.endsWith(".BO") || symbol === "^BSESN") return "BSE";
+    if (exchange(id) === "YAHOO") return "US";
+  }
+  return raw && !["YAHOO", "YAHOO FINANCE"].includes(raw) ? raw : exchange(id);
+};

@@ -27,7 +27,7 @@ export async function renderNews(el, app) {
     el.querySelector("[data-list]").innerHTML = r.items
       .map(
         (n) =>
-          `<a class="card news" href="${esc(n.url)}" target="_blank" rel="noopener"><div class="news-title">${esc(n.title)}</div><div class="sub">${esc(n.source || "")}${n.time || n.ago ? ` · ${esc(n.ago || ago(n.time))}` : ""}</div>${n.summary ? `<div class="sub news-sum">${esc(n.summary)}</div>` : ""}</a>`,
+          `<a class="card news" href="${esc(n.url)}" target="_blank" rel="noopener"><div class="news-title">${esc(n.title)}</div><div class="sub">${esc((n.source || "").replace(/yahoo(?: finance)?/ig, "Market data"))}${n.time || n.ago ? ` · ${esc(n.ago || ago(n.time))}` : ""}</div>${n.summary ? `<div class="sub news-sum">${esc(n.summary)}</div>` : ""}</a>`,
       )
       .join("");
   } catch (e) {
@@ -266,7 +266,7 @@ export async function renderFinancials(el, app, opts = {}) {
           "",
         )}<span class="spacer"></span><select class="in" data-freq><option value="annual">Annual</option><option value="quarterly">Quarterly</option></select></div>
       ${t ? `<table class="t"><thead><tr><th class="l"></th>${t.periods.map((p) => `<th>${esc(p)}</th>`).join("")}</tr></thead><tbody>${t.rows.map((r) => `<tr><td class="l">${esc(r.label)}</td>${r.values.map((v) => `<td>${esc(v)}</td>`).join("")}</tr>`).join("")}</tbody></table>` : '<p class="hint-text">Not available for this company.</p>'}
-      <p class="hint-text">${esc(f.note)} Source: ${esc(f.source || "Nasdaq")}.</p>
+      <p class="hint-text">${esc(String(f.note || "").replace(/yahoo(?: finance)?/ig, "Public market data"))} Source: ${esc(String(f.source || "Nasdaq").replace(/yahoo(?: finance)?/ig, "Public market data"))}.</p>
     </div></div>`;
   el.querySelector("[data-freq]").value = freq;
   el.querySelector("[data-freq]").onchange = (e) =>

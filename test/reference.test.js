@@ -772,6 +772,14 @@ const REF = {
         EMA(C, n),
       ]),
     ),
+  "volume-spike": () => ({
+    value: V.map((volume, i) => {
+      const previous = V.slice(Math.max(0, i - 20), i);
+      if (!previous.length) return NaN;
+      const average = previous.reduce((sum, value) => sum + (value || 0), 0) / previous.length;
+      return average ? (volume || 0) / average : NaN;
+    }),
+  }),
 };
 
 test("the reference covers every built-in indicator", () => {

@@ -35,13 +35,32 @@
       </button>
       <div class="sep"></div>
       <div id="tfButtons" class="tf-group"></div>
+      <select id="tfPreset" class="tb" title="Seconds depend on data source; tick and range intervals need trade-by-trade data" aria-label="Timeframe presets">
+        <option value="">Intervals</option>
+        <optgroup label="Seconds">
+          <option>1s</option><option>5s</option><option>10s</option><option>15s</option><option>30s</option><option>45s</option>
+        </optgroup>
+        <optgroup label="Minutes">
+          <option>1m</option><option>2m</option><option>3m</option><option>5m</option><option>10m</option><option>15m</option><option>30m</option><option>45m</option>
+        </optgroup>
+        <optgroup label="Hours">
+          <option>1h</option><option>2h</option><option>3h</option><option>4h</option>
+        </optgroup>
+        <optgroup label="Days / Weeks / Months">
+          <option>1D</option><option>1W</option><option>1M</option><option>3M</option><option>6M</option><option>12M</option>
+        </optgroup>
+        <optgroup label="Ticks & Ranges (trade data required)">
+          <option disabled>1 tick</option><option disabled>10 ticks</option><option disabled>100 ticks</option><option disabled>1000 ticks</option>
+        </optgroup>
+      </select>
       <input
         id="tfCustom"
         class="tf-custom"
         placeholder="7m"
-        title="Any timeframe: 1s, 7m, 2h, 3D, 2W, 3M"
+        title="Custom time interval: for example 2m, 7m, 2h, 3D, 2W, 12M"
         size="4"
       />
+      <button id="tfFav" class="tb icon" title="Add or remove this timeframe from favorites" aria-label="Favorite timeframe">☆</button>
       <div class="sep"></div>
       <select id="chartType" class="tb" title="Chart type"></select>
       <button id="indicatorsBtn" class="tb" title="Indicators">
@@ -59,8 +78,11 @@
         <option value="1">1 chart</option>
         <option value="2v">2 side by side</option>
         <option value="2h">2 stacked</option>
+        <option value="3">3 charts</option>
         <option value="4">4 charts</option>
         <option value="6">6 charts</option>
+        <option value="8">8 charts</option>
+        <option value="16">16 charts</option>
       </select>
       <label class="tb check" title="Change the symbol on every chart at once"
         ><input type="checkbox" id="syncSymbol" /> Sync symbol</label
@@ -132,12 +154,15 @@
           <div class="tab-body" id="bottomBody"></div>
         </div>
       </section>
+      <div class="side-resize" id="sideResize" role="separator" aria-orientation="vertical" aria-label="Resize watchlist panel"></div>
       <aside class="side">
         <div class="tabs" id="sideTabs">
           <button data-tab="watchlist" class="active">Watchlist</button>
           <button data-tab="alerts">Alerts</button>
           <button data-tab="calendar">Calendar</button>
           <button data-tab="news">News</button>
+          <div class="spacer"></div>
+          <button id="sideToggle" class="side-toggle" title="Collapse side panel" aria-label="Collapse side panel">›</button>
         </div>
         <div class="tab-body" id="sideBody"></div>
       </aside>

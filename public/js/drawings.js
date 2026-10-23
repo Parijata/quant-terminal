@@ -71,9 +71,9 @@ export const TOOLS = [
   },
   {
     id: "measure",
-    label: "Price range / measure",
+    label: "Measure",
     points: 2,
-    icon: '<path d="M12 3v18M8 7l4-4 4 4M8 17l4 4 4-4"/>',
+    icon: '<path d="M4 20L20 4M7 17l-2-2M11 13l-2-2M15 9l-2-2M19 5l-2-2"/>',
   },
   {
     id: "long",
@@ -183,6 +183,7 @@ export class DrawingLayer {
   }
 
   draw(ctx, size) {
+    if (this.pane.cfg.drawingsHidden) return;
     ctx.save();
     ctx.font = "11px -apple-system, Segoe UI, Roboto, sans-serif";
     for (const d of [...this.items, ...(this.temp ? [this.temp] : [])]) {
@@ -343,11 +344,17 @@ export class DrawingLayer {
         const bars = Math.round(
           this.pane.logicalOf(b.time) - this.pane.logicalOf(a.time),
         );
+        const seconds = Math.abs(b.time - a.time);
+        const duration = seconds >= 86400
+          ? `${Math.floor(seconds / 86400)}d${Math.floor(seconds % 86400 / 3600) ? ` ${Math.floor(seconds % 86400 / 3600)}h` : ""}`
+          : seconds >= 3600
+            ? `${Math.floor(seconds / 3600)}h${Math.floor(seconds % 3600 / 60) ? ` ${Math.floor(seconds % 3600 / 60)}m` : ""}`
+            : `${Math.max(1, Math.floor(seconds / 60))}m`;
         const diff = b.price - a.price,
           pct = (diff / a.price) * 100;
         ctx.fillStyle = (up ? COLORS.up : COLORS.down) + "1)";
         label(
-          `${diff >= 0 ? "+" : ""}${price(diff)} (${pct >= 0 ? "+" : ""}${pct.toFixed(2)}%)  ${bars} bars`,
+          `${diff >= 0 ? "+" : ""}${price(diff)} (${pct >= 0 ? "+" : ""}${pct.toFixed(2)}%)  ${bars} bars · ${duration}`,
           (a.x + b.x) / 2,
           b.y + (up ? -14 : 14),
           "center",

@@ -29,10 +29,14 @@ test('candles come back sorted with OHLCV', async () => {
   assert.ok(['open', 'high', 'low', 'close', 'volume'].every((k) => k in r.candles[0]));
 });
 
-test('state round-trips', async () => {
-  await fetch(`${base}/api/state`, { method: 'PUT', headers: H, body: JSON.stringify({ watchlists: { Main: ['BINANCE:BTCUSDT'] } }) });
+test('state round-trips chart settings and chart templates for restart persistence', async () => {
+  const chartSettingsDefault = { backgroundColor: '#010203', scaleMode: 'log', statusVolume: false };
+  const panes = [{ symbol: 'YAHOO:RELIANCE.NS', tf: '5m', chartSettings: { timezone: 'Asia/Kolkata', upColor: '#39ff14' }, navRange: { from: 20, to: 120 } }];
+  await fetch(`${base}/api/state`, { method: 'PUT', headers: H, body: JSON.stringify({ watchlists: { Main: ['BINANCE:BTCUSDT'] }, chartSettingsDefault, panes }) });
   const s = await (await fetch(`${base}/api/state`)).json();
   assert.deepEqual(s.watchlists, { Main: ['BINANCE:BTCUSDT'] });
+  assert.deepEqual(s.chartSettingsDefault, chartSettingsDefault);
+  assert.deepEqual(s.panes, panes);
 });
 
 test('alerts can be created, listed and deleted', async () => {
