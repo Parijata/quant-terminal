@@ -24,6 +24,18 @@ npm start
 
 There's no `npm install` step. Next time, double-click `start.command` (Mac), `start.bat` (Windows) or run `./start.sh` (Linux).
 
+### Get it from GitHub on another Windows computer
+
+1. Install [Node.js 18 or newer](https://nodejs.org/).
+2. Install and open GitHub Desktop, then choose **File → Clone repository**.
+3. Select `Parijata/quant-terminal`, choose where to keep the folder, and click **Clone**.
+4. In GitHub Desktop, choose **Show in Explorer**.
+5. Double-click `start.bat`. Quant Terminal opens in your browser at `http://localhost:3777` (or the next available port).
+
+To get later code updates, close Quant Terminal, open the repository in GitHub Desktop, click **Fetch origin** and then **Pull origin**, and double-click `start.bat` again.
+
+GitHub stores the app's code; it does not run this Node.js app as a public website. The app runs on each computer where you start it. Your watchlists, drawings, alerts, and paper-trading data stay in that computer's ignored `data/` folder and are not uploaded to GitHub. To move that data to another computer, close the app and copy the `data/` folder separately. Keep API keys and other private data out of GitHub.
+
 ## What's in it
 
 | You get | Notes |
